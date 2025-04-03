@@ -52,5 +52,12 @@
       "model_name": "01-ai/Yi-1.5-6B",
       "gradient_accumulation_steps": "6",
       "per_device_batch_size": "2"
-    }
+    },
+    "llama2-7b-newsqa": {
+      "model_name": "swj0419/llama2-7b_chat_newsqa",
+      "tokenizer": "meta-llama/Llama-2-7b-chat-hf",
+      "gradient_accumulation_steps": "6",
+      "per_device_batch_size": "2",
+      "instruct": true
+    }    
   }

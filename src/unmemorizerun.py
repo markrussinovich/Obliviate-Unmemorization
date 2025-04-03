@@ -130,6 +130,8 @@ def run_unmemorize(model_name, model_config, logging_folder, model_folder,
     commandLine += " --model_name " + model_name
     if model_config.get("instruct", None) is not None:
         commandLine += " --instruct" 
+    if model_config.get("tokenizer", None) is not None:
+        commandLine += " --tokenizer_name " + model_config["tokenizer"]
     commandLine += " --logfile " + logfile
     commandLine += " --output_dir " + model_folder
         

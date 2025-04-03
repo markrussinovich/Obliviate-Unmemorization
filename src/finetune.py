@@ -553,13 +553,14 @@ def main():
         # first article
         logger.info(f"First article: {raw_dataset[0]['article'][:100]}")
 
-        train_dataset = CustomDataset(raw_dataset, tokenizer, model, args.unmemorize,
-                                      args.unmemorize_start, args.unmemorize_stride, args.unmemorize_span,
-                                      args.unmemorize_smart_stride,
-                                      args.unmemorize_smart_select,
-                                      args.unmemorize_top_k,
-                                      instruct=args.instruct_model )
-        
+        with accelerator.main_process_first():
+            train_dataset = CustomDataset(raw_dataset, tokenizer, model, args.unmemorize,
+                                        args.unmemorize_start, args.unmemorize_stride, args.unmemorize_span,
+                                        args.unmemorize_smart_stride,
+                                        args.unmemorize_smart_select,
+                                        args.unmemorize_top_k,
+                                        instruct=args.instruct_model )
+
         # duplicate the data 100 times
         if args.unmemorize:
             train_dataset = torch.utils.data.ConcatDataset([train_dataset]*200)    
@@ -654,6 +655,7 @@ def main():
         lr_scheduler = DummyScheduler(
             optimizer, total_num_steps=args.max_train_steps, warmup_num_steps=args.num_warmup_steps
         )
+
 
     # Prepare everything with our `accelerator`.
     model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(

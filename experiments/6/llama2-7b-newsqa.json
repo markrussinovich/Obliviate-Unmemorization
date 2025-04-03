@@ -1,0 +1,21 @@
+{
+  "base_directory": "/datadrive2/unmemorize/experiments/6",
+  "experiments": [
+    {
+      "model_name": "llama2-7b-newsqa",
+      "configurations": [
+        {
+          "config": "10-5-1",
+          "sample_count": 1000,
+          "experiment_types": [
+            {
+              "data": "newsqa",
+              "name": "standard",
+              "smart_select": false
+            }                            
+          ]
+        }
+     ]
+    }
+  ]
+}

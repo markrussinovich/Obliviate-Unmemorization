@@ -10,8 +10,10 @@ DEBUG=false
 # datasets
 SYNTHETIC_DATA="data/synthetic"
 SYNTHETIC_DATA100="data/synthetic100"
+NEWSQA_DATA="data/newsqa"
 PRETRAIN_DATA="data/organic/dataset"
 PRETRAIN_LABELS="data/organic/labels.txt"
+
 
 # Parse command line arguments
 while [[ "$#" -gt 0 ]]; do
@@ -64,6 +66,8 @@ get_dataset_path() {
         echo "$SYNTHETIC_DATA"
     elif [ "$dataset" = "synthetic100" ]; then
        echo "$SYNTHETIC_DATA100"
+    elif [ "$dataset" = "newsqa" ]; then
+        echo "$NEWSQA_DATA"
     else
         echo "$PRETRAIN_DATA"
     fi
