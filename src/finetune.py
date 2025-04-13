@@ -329,6 +329,8 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
         'eval_loss': None
     }
     
+    batches_with_probs = 0  # Track batches with valid probability data
+    
     for _, batch in enumerate(eval_dataloader):
         with torch.no_grad():
             outputs = model(input_ids=batch['article_ids'], 
@@ -348,46 +350,54 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
                                                batch['article_mask'], 
                                                batch['unmemorize_mask'])
 
-            metrics['max_prob'] = max(metrics['max_prob'], probs.max())
-            metrics['min_prob'] = min(metrics['min_prob'], probs.min())
-            metrics['median_prob'] += probs.median()
-            
-            # Calculate max_span_prob
-            span = args.unmemorize_span
-            num_spans = len(probs) // span
-            for i in range(num_spans):
-                span_probs = probs[i*span:(i+1)*span]
-                product = 1
-                for p in span_probs:
-                    product *= p
-                metrics['max_span_prob'] = max(metrics['max_span_prob'], product)
+            # Check if probs tensor has elements before calculating metrics
+            if probs.numel() > 0:
+                metrics['max_prob'] = max(metrics['max_prob'], probs.max().item())
+                metrics['min_prob'] = min(metrics['min_prob'], probs.min().item())
+                metrics['median_prob'] += probs.median().item()
+                batches_with_probs += 1
+                
+                # Calculate max_span_prob
+                span = args.unmemorize_span
+                if len(probs) >= span:  # Only calculate if we have enough probabilities
+                    num_spans = len(probs) // span
+                    for i in range(num_spans):
+                        span_probs = probs[i*span:(i+1)*span]
+                        product = 1
+                        for p in span_probs:
+                            product *= p.item()
+                        metrics['max_span_prob'] = max(metrics['max_span_prob'], product)
+            else:
+                logger.info("Empty probability tensor encountered, skipping metrics calculation for this batch")
             
             if check_only_one:
                 check_only_one = False
-                debugprobs = get_unmemorize_probabilities(
-                    outputs.logits[0].unsqueeze(0),
-                    batch['article_ids'][0].unsqueeze(0),
-                    batch['article_mask'][0].unsqueeze(0),
-                    None
-                )
+                try:
+                    debugprobs = get_unmemorize_probabilities(
+                        outputs.logits[0].unsqueeze(0),
+                        batch['article_ids'][0].unsqueeze(0),
+                        batch['article_mask'][0].unsqueeze(0),
+                        None
+                    )
 
-                # find first 1 in batch[0] attention mask
-                first_label = (batch['article_mask'][0] == 1).nonzero(as_tuple=True)[0][0].item()
-                for i in range(1, len(debugprobs)):
-                    if True: 
-
-                        logger.info(f"[{i-1}] unmemorize: {batch['unmemorize_mask'][0][first_label+i]}")
-                        logger.info(f"  probs:      {debugprobs[i-1]}")
-                        logger.info(f"  token:      {tokenizer.decode(batch['article_ids'][0][first_label+i])}")
-                        logger.info(f"  token ID:   {batch['article_ids'][0][first_label+i]}")
-                        
-                        # get top token from the batch target_logits
-                        top_tokens_tensor = batch['target_logits']['tokens'][first_label+i-1]['top_tokens']
-                        
-                        # Construct the vectors for this batch index
-                        top_tokens = torch.tensor([tensor[0].item() for tensor in top_tokens_tensor], 
-                                                device=model.device)
-                        logger.info(f"  top tokens: {tokenizer.decode(top_tokens[0])}")
+                    # find first 1 in batch[0] attention mask
+                    first_label = (batch['article_mask'][0] == 1).nonzero(as_tuple=True)[0][0].item()
+                    for i in range(1, len(debugprobs)):
+                        if True: 
+                            logger.info(f"[{i-1}] unmemorize: {batch['unmemorize_mask'][0][first_label+i]}")
+                            logger.info(f"  probs:      {debugprobs[i-1]}")
+                            logger.info(f"  token:      {tokenizer.decode(batch['article_ids'][0][first_label+i])}")
+                            #logger.info(f"  token ID:   {batch['article_ids'][0][first_label+i]}")
+                            
+                            # get top token from the batch target_logits
+                            top_tokens_tensor = batch['target_logits']['tokens'][first_label+i-1]['top_tokens']
+                            
+                            # Construct the vectors for this batch index
+                            top_tokens = torch.tensor([tensor[0].item() for tensor in top_tokens_tensor], 
+                                                    device=model.device)
+                            logger.info(f"  top tokens: {tokenizer.decode(top_tokens[0])}")
+                except (ValueError, RuntimeError, IndexError) as e:
+                    logger.info(f"Error in debug probabilities calculation: {e}")
                         
         else:   
             loss = outputs.loss
@@ -397,7 +407,12 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
     try:
         metrics['eval_loss'] = torch.mean(losses)
         metrics['perplexity'] = math.exp(metrics['eval_loss'])
-        metrics['median_prob'] /= len(eval_dataloader)
+        
+        # Only calculate median_prob if we have valid batches
+        if batches_with_probs > 0:
+            metrics['median_prob'] /= batches_with_probs
+        else:
+            metrics['median_prob'] = 0
     except OverflowError:
         metrics['perplexity'] = float("inf")
     
@@ -563,7 +578,7 @@ def main():
 
         # duplicate the data 100 times
         if args.unmemorize:
-            train_dataset = torch.utils.data.ConcatDataset([train_dataset]*200)    
+            train_dataset = torch.utils.data.ConcatDataset([train_dataset]*1) # 200)    
         else:
             train_dataset = torch.utils.data.ConcatDataset([train_dataset]*50)
         

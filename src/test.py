@@ -22,6 +22,7 @@ from utils import CustomDataset
 NUM_PPRIME_TOKENS = 6
 BATCH_SIZE = 1
 NUM_DIFF_CHARS = 500
+MAX_TEST_SAMPLES = 10
 
 def setup_logging(logging_folder, greedy = False, insert = False):
     # Create logging folder if it doesn't exist
@@ -501,8 +502,9 @@ def main():
     raw_dataset = load_from_disk(args.dataset)
     train_dataset = CustomDataset(raw_dataset, tokenizer, model, instruct=args.instruct)
     
-    num_samples = len(train_dataset) if args.sample_count == -1 else min(args.sample_count, len(train_dataset))
+    num_samples = len(train_dataset) if args.sample_count == -1 else min(args.sample_count, min(MAX_TEST_SAMPLES, len(train_dataset)))
     num_batches = (num_samples + BATCH_SIZE - 1) // BATCH_SIZE
+    logger.info(f"Number of tested samples: {num_samples}")
     
     # Run the targeted token test if conditions are met
     if args.insert and not args.instruct and args.config:

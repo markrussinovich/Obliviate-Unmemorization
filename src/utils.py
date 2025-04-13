@@ -4,7 +4,6 @@ import json
 import re
 import torch.nn.functional as F
 from tokenizers import pre_tokenizers, Regex
-from tqdm.auto import tqdm
 
 INSTRUCT_PROMPT = "Generate the entire rest of this text, continuing until you reach the end: "
 INSTRUCT_PROMPT_PREFIX = 15
@@ -19,7 +18,12 @@ class CustomDataset(Dataset):
                  max_length=512, instruct=False):
         self.dataset = dataset
         self.tokenizer = tokenizer
-        self.model = model.to("cuda")
+        if hasattr(model, 'to') and callable(getattr(model, 'to')):
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self.model = model.to(device)
+        else:
+            # If it's an LLM or another object without a 'to' method, use as is
+            self.model = model
         self.max_length = max_length
         self.instruct = instruct
         
@@ -165,249 +169,150 @@ class CustomDataset(Dataset):
                 self.encoded_questions.append(encoded_q)
                 self.encoded_options.append(encoded_options)
                 self.encoded_answers.append(encoded_a)
-                                    
+                
     def _get_target_logits(self):
-        """
-        Optimized version of _get_target_logits that pre-computes token properties
-        for the vocabulary to avoid repeated decoding, and preserves original position indexing.
-        Assumes self.target_logits is initialized as an empty list before calling.
-        """
-        BATCH_SIZE = 32 # Adjust based on memory constraints
-        encoded_input_ids = self.encoded_articles['input_ids']
-        encoded_attention_mask = self.encoded_articles['attention_mask']
-        unmemorize_masks = self.encoded_articles['unmemorize_mask']
-        total_samples = len(encoded_input_ids)
-
-        if total_samples == 0:
-            return # Nothing to process
-
-        # Determine processing device (use model's device if available, else input tensor's device)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = self.model.to(device) # Move model to device
-        # try:
-        #     device = next(self.model.parameters()).device
-        # except Exception:
-        #     device = encoded_input_ids.device if isinstance(encoded_input_ids, torch.Tensor) else torch.device("cpu")
-
-        self.model.eval() # Ensure model is in evaluation mode
-
-        # --- Pre-computation of Token Properties ---
-        # Define special tokens to skip based on tokenizer attributes
-        skip_tokens = set()
-        for attr in ['pad_token_id', 'eos_token_id', 'bos_token_id', 'sep_token_id', 'cls_token_id']:
-            token_id = getattr(self.tokenizer, attr, None)
-            if token_id is not None:
-                skip_tokens.add(token_id)
-
-        # Pre-compute properties for all tokens in the vocabulary
-        precomputed_token_properties = {}
-        vocab_size = self.tokenizer.vocab_size
-        # Optional: Add tqdm progress bar for pre-computation if vocab_size is large
-        vocab_iterator = range(vocab_size)
-        # if tqdm and vocab_size > 10000: # Example threshold
-        #    vocab_iterator = tqdm(vocab_iterator, desc="Pre-computing token properties", leave=False)
-
-        for token_id in vocab_iterator:
-            # Handle potential None token_id if vocab isn't dense (unlikely for HF tokenizers)
-            if token_id is None: continue
-
-            # Basic check for obviously invalid IDs (though vocab_size should be accurate)
-            if not isinstance(token_id, int) or token_id < 0: continue
-
-            try:
-                # Decode the single token ID
-                # Use clean_up_tokenization_spaces=False to preserve leading spaces accurately
-                token_text = self.tokenizer.decode([token_id],
-                                                   skip_special_tokens=False,
-                                                   clean_up_tokenization_spaces=False)
-            except Exception:
-                 # Handle rare cases where decoding might fail for specific internal/unused IDs
-                 token_text = ""
-
-            is_special = token_id in skip_tokens
-
-            # Check for leading space (common in SentencePiece/BPE)
-            # Use the decoded text directly as startswith(' ') might miss symbols like 'Ġ'
-            # A more robust check might involve tokenizer-specific logic if available
-            # For now, stick to checking the decoded string's start
-            has_space = token_text.startswith(' ') # Common heuristic, might need refinement
-
-            # Check capitalization (after removing potential leading space)
-            stripped_text = token_text.lstrip(' ') # Only strip leading space
-            is_capitalized = len(stripped_text) > 0 and stripped_text[0].isupper()
-
-            precomputed_token_properties[token_id] = {
-                # 'text': token_text, # Store text only if needed later, otherwise skip to save memory
-                'is_special': is_special,
-                'has_space': has_space,
-                'is_capitalized': is_capitalized
-            }
-        # --- End of Pre-computation ---
-
-
-        # Setup batch processing and progress bar
+        BATCH_SIZE = 32
+        total_samples = len(self.encoded_articles['input_ids'])
         num_batches = (total_samples + BATCH_SIZE - 1) // BATCH_SIZE
-        use_progress = total_samples > 1
-        if use_progress and tqdm:
-            batch_iterator = tqdm(range(num_batches), desc="Getting target logits")
-        else:
-            batch_iterator = range(num_batches)
 
-        # Process samples in batches
-        for batch_idx in batch_iterator:
+        # Special tokens to skip
+        skip_tokens = {
+            self.tokenizer.pad_token_id,
+            self.tokenizer.eos_token_id,
+            self.tokenizer.bos_token_id,
+            self.tokenizer.sep_token_id if hasattr(self.tokenizer, 'sep_token_id') else -1,
+            self.tokenizer.cls_token_id if hasattr(self.tokenizer, 'cls_token_id') else -1
+        }
+        skip_tokens.discard(-1)  # Remove placeholder value if it was added
+        
+        def matches_capitalization(orig_text: str, new_text: str) -> bool:
+            """Check if new_text matches the capitalization pattern of orig_text"""
+            # Strip spaces for capitalization check
+            orig_stripped = orig_text.lstrip(' -')
+            new_stripped = new_text.lstrip(' -')
+            
+            # Both empty or whitespace
+            if not orig_stripped or not new_stripped:
+                return True
+                
+            # Check first letter capitalization
+            orig_is_upper = orig_stripped[0].isupper()
+            new_is_upper = new_stripped[0].isupper()
+            
+            return orig_is_upper == new_is_upper
+        
+        device = next(self.model.parameters()).device if hasattr(self.model, 'parameters') else 'cpu'
+        
+        for batch_idx in range(num_batches):
             start_idx = batch_idx * BATCH_SIZE
             end_idx = min((batch_idx + 1) * BATCH_SIZE, total_samples)
 
-            # Get batch data and move to device
-            batch_input_ids = encoded_input_ids[start_idx:end_idx].to(device)
-            batch_attention_mask = encoded_attention_mask[start_idx:end_idx].to(device)
-            batch_unmemorize_masks = unmemorize_masks[start_idx:end_idx].cpu() # Keep masks on CPU for easier indexing
+            # Move the batch tensors to the correct device
+            batch_input_ids = self.encoded_articles['input_ids'][start_idx:end_idx].to(device)
+            batch_attention_mask = self.encoded_articles['attention_mask'][start_idx:end_idx].to(device)
+            batch_labels = self.encoded_articles['input_ids'][start_idx:end_idx].to(device)
 
-            # Forward pass to get logits
             with torch.no_grad():
                 outputs = self.model(
                     input_ids=batch_input_ids,
                     attention_mask=batch_attention_mask,
-                    # labels are not strictly needed if loss is not used, but passing them often doesn't hurt
-                    # labels=batch_input_ids,
-                )
-                batch_logits = outputs.logits.cpu() # Move logits to CPU for processing loop
+                    labels=batch_labels,
+                )    
+                
+            for batch_index in range(start_idx, end_idx):
+                local_index = batch_index - start_idx
+                unmemorize_mask = self.encoded_articles['unmemorize_mask'][batch_index]
+                
+                sample_logits = {
+                    'tokens': {}
+                }
+                
+                for i in range(len(outputs.logits[local_index])-1):
+                    response_probs = torch.softmax(outputs.logits[local_index][i], dim=-1)
 
-            # Process each sample in the batch
-            for i in range(batch_logits.shape[0]): # Iterate over samples in the current batch
-                sample_global_idx = start_idx + i
-                sample_logits_tensor = batch_logits[i]
-                unmemorize_mask = batch_unmemorize_masks[i]
-                attention_mask = batch_attention_mask[i].cpu() # Ensure attention mask is on CPU for checks
-                input_ids_sample = batch_input_ids[i].cpu() # Ensure input IDs are on CPU for checks
-
-                sample_results = {'tokens': {}} # Store results for this sample
-
-                # Find where the actual sequence starts (first 1 in attention mask)
-                valid_positions = torch.nonzero(attention_mask != 0, as_tuple=True)[0]
-                if len(valid_positions) == 0:
-                    self.target_logits.append(sample_results) # Append empty results for empty sample
-                    continue
-
-                first_valid_pos = valid_positions[0].item()
-                seq_len = len(input_ids_sample) # Use actual length
-
-                # Process each token position in the sequence
-                for pos_idx in range(first_valid_pos, seq_len):
-                    # Skip positions beyond attention mask explicitly (redundant if loop max is seq_len, but safe)
-                    if pos_idx >= len(attention_mask) or attention_mask[pos_idx] == 0:
-                        continue
-
-                    # Calculate probability distribution for the *next* token prediction
-                    # Use float for softmax for numerical stability
-                    response_probs = torch.softmax(sample_logits_tensor[pos_idx].float(), dim=-1)
-
-                    # Check if the *next* token position is marked for unmemorization
-                    check_unmemorize_idx = pos_idx + 1
-                    apply_unmemorize_filter = (
-                        check_unmemorize_idx < len(unmemorize_mask) and
-                        unmemorize_mask[check_unmemorize_idx] == 1
-                    )
-
-                    if apply_unmemorize_filter:
-                        # --- Unmemorize Filtering Logic ---
-                        # Get the token we want to avoid predicting
-                        article_token_id = input_ids_sample[check_unmemorize_idx].item()
-
-                        # Get properties of the token to avoid using the precomputed dict
-                        # Use .get for safety, providing default neutral properties if ID somehow missing
-                        default_props = {'is_special': False, 'has_space': False, 'is_capitalized': False}
-                        article_token_props = precomputed_token_properties.get(article_token_id, default_props)
-
-                        # Get more candidates than needed initially
-                        k_initial = min(6 * self.unmemorize_top_k, len(response_probs))
-                        top_initial_probs, top_initial_tokens = torch.topk(response_probs, k=k_initial)
-
-                        # Filter out the article token and apply smart selection if enabled
+                    if unmemorize_mask[i+1] == 1:
+                        # Get the actual token we want to remove
+                        article_token = self.encoded_articles['input_ids'][batch_index][i+1].item()
+                        original_token_text = self.tokenizer.decode([article_token])
+                        requires_space = original_token_text.startswith(' ') or original_token_text.startswith('-')
+                        
+                        # Get more tokens than we need initially to allow for filtering
+                        k = min(6 * self.unmemorize_top_k, len(response_probs))  # Increased for additional capitalization filtering
+                        top_probs, top_tokens = torch.topk(response_probs, k=k)
+                        
+                        # Filter out article token and get valid tokens
                         valid_indices = []
-                        for j in range(len(top_initial_tokens)):
-                            candidate_token_id = top_initial_tokens[j].item()
-
-                            # Skip the token we want to avoid
-                            if candidate_token_id == article_token_id:
+                        for j in range(len(top_tokens)):
+                            token = top_tokens[j].item()
+                            token_text = self.tokenizer.decode([token])
+                            
+                            # Skip the article token entirely
+                            if token == article_token:
                                 continue
-
-                            # Apply smart selection rules if enabled
-                            if self.unmemorize_smart_select:
-                                candidate_props = precomputed_token_properties.get(candidate_token_id, default_props)
-
-                                # Rule 1: First alternative shouldn't be special
+                            
+                            if self.unmemorize_smart_select == True:
+                                    
+                                # For highest probability token only (after removing article token)
                                 if len(valid_indices) == 0:
-                                    if candidate_props['is_special']:
+                                    # Skip if it's a special token
+                                    if token in skip_tokens:
                                         continue
-
-                                # Rule 2: Check space prefix consistency
-                                if article_token_props['has_space'] and not candidate_props['has_space']:
+                                
+                                # Check space requirement
+                                if requires_space:
+                                    if not (token_text.startswith(' ') or token_text.startswith('-')):
+                                        continue
+                                
+                                # Check capitalization
+                                if not matches_capitalization(original_token_text, token_text):
                                     continue
-
-                                # Rule 3: Check capitalization consistency
-                                if article_token_props['is_capitalized'] != candidate_props['is_capitalized']:
-                                    continue
-
-                            # If checks pass, add index to list
+                                    
                             valid_indices.append(j)
                             if len(valid_indices) >= self.unmemorize_top_k:
-                                break # Found enough valid candidates
-
-                        # --- Refetching logic (Simplified - using same initial pool for simplicity now) ---
-                        # Original code had complex refetching; for simplicity here, we work with the initial pool.
-                        # If the initial fetch (k*6) wasn't enough, the fallback will handle it.
-                        # A more complex refetch could be added back if necessary.
-
-                        # Select the final tokens based on valid_indices found
-                        if len(valid_indices) >= self.unmemorize_top_k:
-                            # We found enough during the first pass
-                            final_indices = torch.tensor(valid_indices[:self.unmemorize_top_k], dtype=torch.long)
-                            top_probs = top_initial_probs[final_indices]
-                            top_tokens = top_initial_tokens[final_indices]
-                        elif len(valid_indices) > 0:
-                           # Found some, but fewer than k, use what we found
-                           final_indices = torch.tensor(valid_indices, dtype=torch.long)
-                           top_probs = top_initial_probs[final_indices]
-                           top_tokens = top_initial_tokens[final_indices]
-                        else:
-                            # --- Fallback if no valid tokens found by filtering ---
-                            # Take top k+1, remove the article token, take top k of remainder
-                            k_fallback = min(self.unmemorize_top_k + 1, len(response_probs))
-                            fallback_probs, fallback_tokens = torch.topk(response_probs, k=k_fallback)
-
-                            # Create mask to exclude the article token
-                            mask = fallback_tokens != article_token_id
-                            top_tokens = fallback_tokens[mask][:self.unmemorize_top_k]
-                            top_probs = fallback_probs[mask][:self.unmemorize_top_k]
-
-                            # Handle edge case where article_token was the only token predicted
-                            if len(top_tokens) == 0:
-                                # What to do here? Maybe take top_k excluding article token even if it means fewer than k?
-                                # Or take the absolute top_k even if it includes invalid ones?
-                                # Let's just take the original top_k in this very rare case.
-                                top_probs, top_tokens = torch.topk(response_probs, k=self.unmemorize_top_k)
-
-
+                                break
+                        
+                        # If we don't have enough tokens, get more from the distribution
+                        while len(valid_indices) < self.unmemorize_top_k:
+                            k = min(len(response_probs), k + self.unmemorize_top_k)
+                            top_probs, top_tokens = torch.topk(response_probs, k=k)
+                            
+                            # Continue filtering from where we left off
+                            for j in range(len(valid_indices), len(top_tokens)):
+                                token = top_tokens[j].item()
+                                token_text = self.tokenizer.decode([token])
+                                
+                                if token != article_token:
+                                    # Apply both space and capitalization requirements
+                                    if requires_space:
+                                        if not (token_text.startswith(' ') or token_text.startswith('-')):
+                                            continue
+                                    if not matches_capitalization(original_token_text, token_text):
+                                        continue
+                                    valid_indices.append(j)
+                                    if len(valid_indices) >= self.unmemorize_top_k:
+                                        break
+                            
+                            # Break if we've looked through all possible tokens
+                            if k == len(response_probs):
+                                break
+                        
+                        # Take the top self.unmemorize_top_k valid tokens (or all we could find)
+                        valid_indices = valid_indices[:self.unmemorize_top_k]
+                        top_probs = top_probs[valid_indices]
+                        top_tokens = top_tokens[valid_indices]
                     else:
-                        # --- Normal Token Logic (No Unmemorize Filter) ---
-                        k_normal = min(self.unmemorize_top_k, len(response_probs))
-                        top_probs, top_tokens = torch.topk(response_probs, k=k_normal)
+                        top_probs, top_tokens = torch.topk(response_probs, k=self.unmemorize_top_k)
 
-                    # Normalize the final selected probabilities
-                    if top_probs.sum() > 1e-6: # Avoid division by zero if all probs are tiny
-                         top_probs = top_probs / top_probs.sum()
-                    # else: leave as is (likely all zeros or near zeros)
+                    # normalize top_probs
+                    top_probs = top_probs / top_probs.sum()
 
-                    # Store results keyed by the current position index
-                    sample_results['tokens'][pos_idx] = {
-                        'top_tokens': top_tokens.tolist(), # Convert to list for storage
-                        'top_probs': top_probs.tolist(),   # Convert to list for storage
+                    sample_logits['tokens'][i] = {
+                        'top_tokens': top_tokens.tolist(),
+                        'top_probs': top_probs.tolist(),
                     }
 
-                # Append results for the processed sample
-                self.target_logits.append(sample_results)
-                                                                                                    
+                self.target_logits.append(sample_logits)
+            
     def _get_token_info(self, encoding, word_index, outputs):
         """Get token info and probability for a given word index"""
         token_id = encoding[word_index]
@@ -474,235 +379,82 @@ class CustomDataset(Dataset):
             word_ids.append(current_word_id)
         
         return word_ids
-                    
+            
     def _apply_unmemorize(self):
-        """
-        Optimized version of apply_unmemorize that processes articles in batches.
-        Includes a highly optimized path for when smart_stride is disabled,
-        avoiding unnecessary computations like word_ids and model inference.
-        """
-        # Initialize storage for the masks
-        unmemorize_mask_list = []
+        self.encoded_articles['unmemorize_mask'] = []
+        self.encoded_articles['article_unmemorize_ids'] = []
 
-        # Get input data references
-        encoded_input_ids = self.encoded_articles['input_ids']
-        encoded_attention_mask = self.encoded_articles['attention_mask']
-        num_articles = len(encoded_input_ids)
+        for _, (encoded_article, attention_mask) in enumerate(zip(self.encoded_articles['input_ids'], 
+                                                                self.encoded_articles['attention_mask'])):
 
-        # Handle empty input case
-        if num_articles == 0:
-            # Determine expected shape based on how input_ids is stored (e.g., list of tensors or stacked tensor)
-            max_len = encoded_input_ids.shape[1] if isinstance(encoded_input_ids, torch.Tensor) and encoded_input_ids.ndim == 2 else 0
-            # If it's a list, need to handle differently or ensure consistency upstream
-            # Assuming input_ids is a Tensor [num_articles, seq_len]
-            self.encoded_articles['unmemorize_mask'] = torch.empty((0, max_len), dtype=torch.int64)
-            return
+            # move to device
+            encoded_article = encoded_article.to(self.model.device)
+            attention_mask = attention_mask.to(self.model.device)                                                            
 
-        # Determine processing device (use model's device if available, else input tensor's device)
-        try:
-            device = next(self.model.parameters()).device
-        except Exception: # Handle cases where model has no parameters or is not standard nn.Module
-            device = encoded_input_ids.device if isinstance(encoded_input_ids, torch.Tensor) else torch.device("cpu")
-
-        BATCH_SIZE = 32  # Adjust based on memory constraints
-
-        # --- Conditional Model Inference ---
-        # Only run inference if smart stride is enabled, as it needs logits.
-        all_logits = None
-        if self.unmemorize_smart_stride:
-            print("Running model inference for smart stride...")
-            all_logits_list = []
-            self.model.eval() # Ensure model is in evaluation mode
+            # get probability of each token
             with torch.no_grad():
-                batch_iterator_inf = range(0, num_articles, BATCH_SIZE)
-                if tqdm and num_articles > BATCH_SIZE: # Show progress only if multiple batches
-                   batch_iterator_inf = tqdm(batch_iterator_inf, desc="Model Inference", leave=False)
+                outputs = self.model(input_ids=encoded_article.unsqueeze(0), 
+                            attention_mask=attention_mask.unsqueeze(0), 
+                            labels=encoded_article.unsqueeze(0))
+            
+            # initialize the unmemorize mask to all 0s
+            unmemorize_mask = torch.zeros_like(attention_mask)
+            
+            decoded_text = self.tokenizer.decode(encoded_article)
+            encoding_ids = self.tokenizer(decoded_text, return_offsets_mapping=True)
+            api_word_ids = encoding_ids.word_ids()
 
-                for batch_start in batch_iterator_inf:
-                    batch_end = min(batch_start + BATCH_SIZE, num_articles)
-                    # Ensure batch tensors are on the correct device for the model
-                    batch_ids = encoded_input_ids[batch_start:batch_end].to(device)
-                    batch_attention = encoded_attention_mask[batch_start:batch_end].to(device)
-
-                    outputs = self.model(
-                        input_ids=batch_ids,
-                        attention_mask=batch_attention,
-                        # No labels needed if only using logits for inference
-                    )
-                    # Move logits to CPU for potentially large datasets to avoid GPU OOM during aggregation/processing
-                    all_logits_list.append(outputs.logits.cpu())
-
-            if all_logits_list:
-                all_logits = torch.cat(all_logits_list, dim=0)
-            del all_logits_list # Free memory
-
-
-        # --- Pre-calculate Word IDs (only if needed) ---
-        all_word_ids = None
-        if self.unmemorize_smart_stride:
-            print("Calculating word IDs for smart stride...")
-            # Assuming _create_word_ids operates on a single encoding tensor
-            # and returns a tensor/list. Processing on CPU assumed.
-            word_id_iterator = range(num_articles)
-            if tqdm and num_articles > 1: # Show progress
-                 word_id_iterator = tqdm(word_id_iterator, desc="Computing Word IDs", leave=False)
-            # Make sure input_ids are accessible, potentially move to CPU if needed by _create_word_ids
-            input_ids_cpu = encoded_input_ids.cpu() if isinstance(encoded_input_ids, torch.Tensor) else encoded_input_ids
-            all_word_ids = [self._create_word_ids(input_ids_cpu[idx]) for idx in word_id_iterator]
-
-
-        # --- Mask Generation Loop ---
-        print("Generating unmemorize masks...")
-        batch_iterator_mask = range(0, num_articles, BATCH_SIZE)
-        if tqdm and num_articles > BATCH_SIZE: # Show progress
-            desc = "Applying unmemorize (Smart)" if self.unmemorize_smart_stride else "Applying standard unmemorize"
-            batch_iterator_mask = tqdm(batch_iterator_mask, desc=desc)
-
-        # Ensure data used in the loop is on CPU to avoid per-item GPU overhead if logic is complex
-        # Or keep on GPU if loops are simple and data transfer is the bottleneck. CPU is safer for Python loops.
-        input_ids_cpu = encoded_input_ids.cpu() if isinstance(encoded_input_ids, torch.Tensor) else encoded_input_ids
-        attention_mask_cpu = encoded_attention_mask.cpu() if isinstance(encoded_attention_mask, torch.Tensor) else encoded_attention_mask
-
-
-        for batch_start in batch_iterator_mask:
-            batch_end = min(batch_start + BATCH_SIZE, num_articles)
-            batch_size = batch_end - batch_start
-
-            # Get data for the current batch (already on CPU)
-            batch_ids_cpu = input_ids_cpu[batch_start:batch_end]
-            batch_attention_cpu = attention_mask_cpu[batch_start:batch_end]
-            batch_logits_cpu = all_logits[batch_start:batch_end] if all_logits is not None else None
-            batch_word_ids_cpu = all_word_ids[batch_start:batch_end] if all_word_ids is not None else None
-
-
-            for i in range(batch_size):
-                article_idx_global = batch_start + i
-                encoded_article = batch_ids_cpu[i]
-                attention_mask = batch_attention_cpu[i]
-                article_len = len(encoded_article) # Get length once
-
-                # Initialize mask (on CPU)
-                unmemorize_mask = torch.zeros_like(attention_mask, dtype=torch.int64)
-
-                # Find first actual token index (skip padding/CLS)
-                non_zero_indices = torch.nonzero(attention_mask != 0, as_tuple=True)[0]
-                if len(non_zero_indices) == 0:
-                    unmemorize_mask_list.append(unmemorize_mask)
-                    continue # Skip empty sequences
-
-                start_index = non_zero_indices[0].item() + 1 # Adjust +1 based on tokenization strategy
-
-                # --- Apply Standard or Smart Logic ---
-                if not self.unmemorize_smart_stride:
-                    # --- >>> Optimized Standard Path <<< ---
-                    # No word_ids, logits, softmax, decode, regex needed.
-                    current_index = start_index + self.unmemorize_start
-
-                    while current_index < article_len and attention_mask[current_index] != 0:
-                        # Apply mask across the span efficiently
-                        span_end_index = min(current_index + self.unmemorize_span, article_len)
-                        for token_pos in range(current_index, span_end_index):
-                            if attention_mask[token_pos] != 0:
-                                unmemorize_mask[token_pos] = 1
-                            else:
-                                # Hit padding within the span, stop processing this span
-                                break
-                        # Move to the next stride position
-                        current_index += self.unmemorize_stride
-                    # --- >>> End of Non-Smart Path <<< ---
-
-                else:
-                    # --- Smart Path (Requires word_ids and logits) ---
-                    if batch_word_ids_cpu is None or batch_logits_cpu is None:
-                         # Should not happen if logic is correct, but defensive check
-                         raise ValueError("Word IDs or Logits not available for smart stride.")
-
-                    word_ids = batch_word_ids_cpu[i] # Get pre-calculated word IDs for this article
-                    logits = batch_logits_cpu[i]     # Get pre-calculated logits for this article
-
-                    # Pre-calculate probabilities for the entire article once
-                    try:
-                        # Ensure logits are float for softmax
-                        article_probs = F.softmax(logits.float(), dim=-1)
-                    except Exception as e:
-                        print(f"Error during softmax for article {article_idx_global}: {e}")
-                        # Decide how to handle: skip article, use default probs, etc.
-                        # For now, skip processing this article's smart logic
-                        unmemorize_mask_list.append(unmemorize_mask) # Append zero mask
-                        continue
-
-                    current_index = start_index + self.unmemorize_start
-
-                    while current_index < article_len and attention_mask[current_index] != 0:
-                        for span_offset in range(self.unmemorize_span):
-                            candidate_index = current_index + span_offset
-
-                            if candidate_index >= article_len or attention_mask[candidate_index] == 0:
-                                break # Span goes out of bounds or into padding
-
-                            # --- Smart Logic Search (backward from candidate) ---
-                            target_mask_index = -1 # Reset for each candidate in span
-                            search_idx = candidate_index
-                            while search_idx >= start_index: # Search backward
-                                current_word_id = word_ids[search_idx] # Assumes word_ids is indexable
-                                is_word_start = (search_idx == start_index or word_ids[search_idx - 1] != current_word_id)
-
-                                if is_word_start:
-                                    token_id = encoded_article[search_idx].item()
-
-                                    # Check probability from pre-calculated tensor
-                                    # Probability of current token (at search_idx) predicted by previous token (search_idx - 1)
-                                    prob = 0.0
-                                    if search_idx > 0:
-                                         # Ensure indices are valid before accessing probs
-                                         if (search_idx - 1) < article_probs.shape[0] and token_id < article_probs.shape[1]:
-                                             prob = article_probs[search_idx - 1, token_id].item()
-                                         else:
-                                             print(f"Warning: Index out of bounds accessing probs for article {article_idx_global}, index {search_idx-1}, token {token_id}")
-
-
-                                    # Check punctuation (still inefficient part)
-                                    # TODO: Replace with faster method if possible
-                                    token = self.tokenizer.decode([token_id], skip_special_tokens=True, clean_up_tokenization_spaces=False)
-                                    # Check if token is non-empty and does *not* start with common non-alphanumeric (excluding whitespace)
-                                    # This regex might need refinement based on tokenizer specifics
-                                    is_not_punct_start = token and not re.match(r'^[^\w\s]', token)
-
-
-                                    if is_not_punct_start and prob < 1.0:
-                                        target_mask_index = search_idx
-                                        break # Found suitable token, stop backward search
-
-                                search_idx -= 1 # Continue searching backward
-
-                            # Mask if the smart logic found a valid target within the search
-                            if target_mask_index != -1:
-                                unmemorize_mask[target_mask_index] = 1
-                            # else: If no suitable token found by smart logic for this span_offset, do nothing
-
-                        # Move to the next stride position
-                        current_index += self.unmemorize_stride
-                    # --- End of Smart Path ---
-
-                # Append the final mask for this article
-                unmemorize_mask_list.append(unmemorize_mask)
-
-        # --- Final Stacking ---
-        # Stack the list of mask tensors into a single tensor
-        if unmemorize_mask_list:
-            try:
-                final_mask_tensor = torch.stack(unmemorize_mask_list)
-            except RuntimeError as e:
-                # This can happen if masks have different lengths, indicating an issue upstream (padding?)
-                print(f"Error stacking masks: {e}. Check input padding consistency.")
-                # Handle error - perhaps return the list or raise exception
-                raise e
-            self.encoded_articles['unmemorize_mask'] = final_mask_tensor
-        else:
-            # Handle case where input was non-empty but generated no masks (e.g., all empty sequences filtered out)
-             max_len = encoded_input_ids.shape[1] if isinstance(encoded_input_ids, torch.Tensor) and encoded_input_ids.ndim == 2 else 0
-
+            # Get the offset mapping
+            encoding = self.encoded_articles['input_ids'][0]
+            word_ids = self._create_word_ids(encoding)
+            
+            # Find the first non-zero element in the attention mask and skip the
+            # [CLS] token
+            start_index = (attention_mask != 0).nonzero(as_tuple=True)[0][0].item()+1
+            
+            index = start_index + self.unmemorize_start
+            while index < len(encoded_article) and attention_mask[index] != 0:
                 
+                span_index = 0
+                while span_index < self.unmemorize_span:
+                    word_index = index 
+                    word_id = word_ids[index]
+                    
+                    if self.unmemorize_smart_stride == True:
+
+                        # Find a suitable word to unmemorize
+                        found_unmemorize = False
+                        while found_unmemorize == False:                        
+                            found_unmemorize = True
+                            
+                            # skip the special tokens
+                            word_index = self._find_valid_word_token(encoding, word_ids, word_index, outputs)
+                            _, token, prob = self._get_token_info(encoding, word_index, outputs)
+                            
+                            # can't unmemorize tokens that have a probability of 1.0
+                            if prob == 1.0:
+                                word_index -= 1
+                                word_id = word_ids[word_index]
+                                found_unmemorize = False
+                    else:
+                        _, token, _ = self._get_token_info(encoding, word_index, outputs)
+
+                    # Set the unmemorize mask
+                    unmemorize_mask[word_index] = 1
+                    
+                    # Move to the next span position
+                    span_index += 1
+                    index = min(index + span_index, len(encoded_article))
+                    
+                # Move to the next stride sposition
+                index = min(index + self.unmemorize_stride, len(encoded_article))
+            
+            # Add the unmemorize mask and article_unmemorize_ids for this article
+            self.encoded_articles['unmemorize_mask'].append(unmemorize_mask)
+
+        # Convert lists to tensors
+        self.encoded_articles['unmemorize_mask'] = torch.stack(self.encoded_articles['unmemorize_mask'])
+
     def tokenized_article(self, idx):
         return self.tokenized_articles[idx]
     
@@ -830,24 +582,46 @@ def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask,
             # Construct the vectors for this batch index
             top_tokens = torch.tensor([tensor[batch_idx].item() for tensor in top_tokens_tensor], device=model.device)
             top_probs = torch.tensor([tensor[batch_idx].item() for tensor in top_probs_tensor], 
-                                            device=model.device, dtype=pred_probs.dtype)            
+                                      device=model.device, dtype=pred_probs.dtype)            
             # Create target distribution tensor
             target_dist = torch.zeros_like(pred_probs)
             target_dist[top_tokens] = top_probs.clone().detach()
 
             if debug == True and batch_idx == 0 and pos.item()-valid_tokens[0]:
-                # get top predicted token 
-                top_pred_token = torch.argmax(pred_probs)
+                # Get top 5 predicted tokens and their probabilities
+                top5_pred_values, top5_pred_indices = torch.topk(pred_probs, min(5, len(pred_probs)))
+                top5_pred_tokens = [tokenizer.decode([idx.item()]) for idx in top5_pred_indices]
                 
-                # get top target token
-                top_target_token = top_tokens[0]
+                # Get top 5 target tokens and their probabilities
+                top5_target_indices = top_tokens[:min(5, len(top_tokens))]
+                top5_target_values = top_probs[:min(5, len(top_probs))]
+                top5_target_tokens = [tokenizer.decode([idx.item()]) for idx in top5_target_indices]
                 
-                if top_pred_token == top_target_token:
-                    logger.info(f"{pos.item()-valid_tokens[0]-1}: {tokenizer.decode([top_pred_token])}")
-                else:
-                    logger.info(f"{pos.item()-valid_tokens[0]-1}: *** {tokenizer.decode([top_pred_token])} vs {tokenizer.decode([top_target_token])}")
+                # Print position
+                logger.info(f"Position {pos.item()-valid_tokens[0]}:")
+                
+                # Print headers
+                logger.info(f"{'TARGET TOKENS':<15} {'PROB':<8} | {'PREDICTED TOKENS':<15} {'PROB':<8}")
+                logger.info("-" * 50)
+                
+                # Print top 5 tokens side by side
+                for i in range(max(len(top5_target_tokens), len(top5_pred_tokens))):
+                    target_token = top5_target_tokens[i] if i < len(top5_target_tokens) else ""
+                    target_prob = f"{top5_target_values[i].item():.4f}" if i < len(top5_target_values) else ""
+                    pred_token = top5_pred_tokens[i] if i < len(top5_pred_tokens) else ""
+                    pred_prob = f"{top5_pred_values[i].item():.4f}" if i < len(top5_pred_values) else ""
+                    
+                    logger.info(f"{target_token:<15} {target_prob:<8} | {pred_token:<15} {pred_prob:<8}")
+                
+                # Highlight match or mismatch for the top token
+                if len(top5_pred_indices) > 0 and len(top5_target_indices) > 0:
+                    if top5_pred_indices[0] == top5_target_indices[0]:
+                        logger.info(f"✓ Top tokens match: {top5_pred_tokens[0]}")
+                    else:
+                        logger.info(f"✗ Top tokens differ: Target={top5_target_tokens[0]} vs Predicted={top5_pred_tokens[0]}")
 
-            # Calculate KL divergence for this position
+            # Always calculate KL divergence for all positions, including unmemorize tokens
+            # This properly pushes the model toward the target distribution
             if pos.item()-valid_tokens[0]:
                 token_kl = F.kl_div(
                     torch.log(pred_probs + 1e-10),  # Add small epsilon to avoid log(0)
@@ -856,33 +630,26 @@ def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask,
                 )
             else:
                 token_kl = 0.0
-                            
-            # get probabilities of label ids for unmemorize mask tokens 
+                
+            # Add debug information for unmemorize tokens
             if shift_unmemorize_mask[batch_idx, pos] == 1:
-                # Get predicted probability for the target token
+                # Get predicted probability for the target token for debugging only
                 target_token = shift_labels[batch_idx, pos]
                 target_prob = pred_probs[target_token]
                 
-                # Add negative log probability to KL loss
-                token_kl = target_prob * 100
-                
-                # if the target probability is less than 0.01, no need
-                # to push it further down
-                if target_prob < 0.01:
-                    token_kl = 0
-                    
-                # if target prob is 1.0, then leave it since it won't budge
+                # If target prob is 1.0, which means no alternative tokens,
+                # we can skip to avoid getting stuck
                 if target_prob == 1.0:
                     if debug == True:
-                        logger.info(f"   [{pos-1}] Target Prob is 1.0 - skipping")
+                        logger.info(f"   [{pos.item()-1}] Target Prob is 1.0 - skipping")
                     token_kl = 0
 
                 if debug == True and batch_idx == 0 and pos.item()-valid_tokens[0]:
-                    logger.info(f"   Unmemorize Loss: {token_kl}")                
-
+                    logger.info(f"   Unmemorize KL Loss: {token_kl}")
+                    logger.info(f"   Current target token prob: {target_prob:.6f}")
             else:
                 if debug == True and batch_idx == 0 and pos.item()-valid_tokens[0]:
-                    logger.info(f"   Loss: {token_kl}")                
+                    logger.info(f"   Standard KL Loss: {token_kl}")                
             
             total_kl_loss += token_kl
             target_logit_idx += 1
@@ -893,5 +660,5 @@ def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask,
         total_kl_loss = total_kl_loss / total_tokens
     
     if debug == True:            
-        logger.info(f"   Total Unmemorize Loss: {total_kl_loss}")                      
+        logger.info(f"   Total KL Loss: {total_kl_loss}")                      
     return total_kl_loss
