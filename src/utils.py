@@ -640,8 +640,8 @@ def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask,
                 # If target prob is 1.0, which means no alternative tokens,
                 # we can skip to avoid getting stuck
                 if target_prob == 1.0:
-                    if debug == True:
-                        logger.info(f"   [{pos.item()-1}] Target Prob is 1.0 - skipping")
+                    if debug == True and batch_idx == 0 and pos.item()-valid_tokens[0]:
+                        logger.info(f"   Target Prob is 1.0: skipping")
                     token_kl = 0
 
                 if debug == True and batch_idx == 0 and pos.item()-valid_tokens[0]:

@@ -578,7 +578,8 @@ def main():
 
         # duplicate the data 100 times
         if args.unmemorize:
-            train_dataset = torch.utils.data.ConcatDataset([train_dataset]*1) # 200)    
+            num_copies = 1000 // len(train_dataset) 
+            train_dataset = torch.utils.data.ConcatDataset([train_dataset]*num_copies)    
         else:
             train_dataset = torch.utils.data.ConcatDataset([train_dataset]*50)
         
