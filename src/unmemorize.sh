@@ -151,6 +151,7 @@ generate_plots() {
     local dataset=$4
     local base_dir=$5
     local sample_count=$6
+    local top_k=$7
     
     local suffix=""
     if [ "$exp_type" == "smart" ]; then
@@ -275,7 +276,8 @@ jq -c '.experiments[]' "$CONFIG_FILE" | while read -r model; do
                             "$EXP_NAME" \
                             "$DATASET_TYPE" \
                             "$BASE_DIR" \
-                            "$SAMPLE_COUNT" 
+                            "$SAMPLE_COUNT" \
+                            "$TOP_K"
                 
             echo ""
         done

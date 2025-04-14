@@ -60,6 +60,10 @@ def extract_metrics(file_path):
                 lcs_length = int(lcs_match.group(1))
                 metrics['lcs'].append(lcs_length)
                 
+    # if metrics are empty
+    if not any(metrics.values()):
+        print(f"Warning: No metrics found in {file_path}")
+        return metrics
     return metrics
 
 def extract_epoch_data(directory):
@@ -290,14 +294,16 @@ def process_runs_folder(folder_path, pretrained_dir=None, memorized_dir=None,
         test_greedy_log = os.path.join(folder_path, subdir, "0", "test_greedy.log")
         
         if os.path.exists(test_log):
-            print(f"Processing {subdir} test.log")
+            if DEBUG:
+                print(f"Processing {subdir} test.log")
             metrics = extract_metrics(test_log)
             for metric_type in metrics:
                 if metrics[metric_type]:  # Only add if there are values
                     run_metrics[metric_type][subdir].extend(metrics[metric_type])
             
         if os.path.exists(test_greedy_log):
-            print(f"Processing {subdir} test_greedy.log")
+            if DEBUG:
+                print(f"Processing {subdir} test_greedy.log")
             metrics = extract_metrics(test_greedy_log)
             for metric_type in metrics:
                 if metrics[metric_type]:  # Only add if there are values
@@ -581,6 +587,7 @@ def create_multi_sample_comparison_plots(metrics_dict, output_dir, plot_title=""
         setup_x_axis(ax, range(len(next(iter(metrics_dict.values()))['bleu'])))
         
         # Save plot
+        print( f"Saving plot for {metric} to {output_dir}")
         plt.savefig(os.path.join(output_dir, f'{metric}_scores_comparison.png'), bbox_inches='tight', dpi=300)
         plt.close()
 
@@ -633,13 +640,21 @@ def main():
             
     else:
         # Original functionality for comparing individual files and samples
+        if DEBUG:
+            print(f"Processing log: {args.input}")
         metrics_dict = {'Current': extract_metrics(args.input)}
         
         if args.input_greedy:
+            if DEBUG:
+                print( f"Processing greedy log: {args.input_greedy}")
             metrics_dict['Current Greedy'] = extract_metrics(args.input_greedy)
         if args.pretrained:
+            if DEBUG:
+                print( f"Processing pretrained log: {args.pretrained}")
             metrics_dict['Pretrained'] = extract_metrics(args.pretrained)
         if args.memorized:
+            if DEBUG:
+                print( f"Processing memorized log: {args.memorized}")
             metrics_dict['Memorized'] = extract_metrics(args.memorized)
         
         sample_labels = read_sample_labels(args.sample_labels) if args.sample_labels else None
