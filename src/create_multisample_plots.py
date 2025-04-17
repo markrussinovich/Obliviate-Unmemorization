@@ -26,7 +26,7 @@ def read_sample_labels(label_file):
 
 def extract_metrics_from_json(file_path):
     """Extract metrics from the summary JSON file."""
-    metrics = {'bleu': {}, 'rouge2': {}, 'rougeL': {}, 'lcs': {}, 'lcs_word': {}}
+    metrics = {'bleu': {}, 'rouge1': {}, 'rouge2': {}, 'rougeL': {}, 'lcs': {}, 'lcs_word': {}}
     
     if not os.path.exists(file_path):
         print(f"Warning: File not found: {file_path}")
@@ -42,6 +42,11 @@ def extract_metrics_from_json(file_path):
         if 'bleu' in data:
             metrics['bleu']['mean'] = data['bleu']['mean']
             metrics['bleu']['max'] = data['bleu']['max']
+
+        # Extract ROUGE1 values
+        if 'rouge1' in data:
+            metrics['rouge1']['mean'] = data['rouge1']['mean']
+            metrics['rouge1']['max'] = data['rouge1']['max']
             
         # Extract ROUGE2 values
         if 'rouge2' in data:
@@ -49,7 +54,7 @@ def extract_metrics_from_json(file_path):
             metrics['rouge2']['max'] = data['rouge2']['max']
             
         # Extract ROUGEL values
-        if 'rougeL_fmeasure' in data:
+        if 'rougeL' in data:
             metrics['rougeL']['mean'] = data['rougeL']['mean']
             metrics['rougeL']['max'] = data['rougeL']['max']
             
@@ -363,6 +368,7 @@ def create_run_comparison_plots(run_metrics, output_dir, plot_title=""):
 
     metrics_info = {
         'bleu': ('BLEU Scores', 'BLEU Score', False),
+        'rouge1': ('ROUGE1 Scores', 'ROUGE1 Score', False),
         'rouge2': ('ROUGE2 Scores', 'ROUGE2 Score', False),
         'rougeL': ('ROUGEL Scores', 'ROUGEL Score', False),
         'lcs': ('Longest Common Substring Length (Characters)', 'Length', True),
