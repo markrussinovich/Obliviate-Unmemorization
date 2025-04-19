@@ -869,7 +869,7 @@ def main():
             batch_indices = list(range(start_idx, end_idx))  # Pass actual dataset indices
             
             ask_questions = False
-            for offset in [0, 100, 200]:
+            for offset in [0, 20, 50, 100, 200]:
                 for prime_length in [10, 50, 100, 200]:
                     results = generate_and_compare_batch(model, args.instruct, tokenizer, batch, batch_indices, starting_offset=offset, prime_length=prime_length, 
                                                         askQuestions=ask_questions, greedy=args.greedy)

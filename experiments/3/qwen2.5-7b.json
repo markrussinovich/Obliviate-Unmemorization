@@ -10,12 +10,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]
@@ -26,12 +26,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]
@@ -42,12 +42,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]
@@ -58,12 +58,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]
@@ -74,12 +74,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]
@@ -90,12 +90,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]
@@ -106,12 +106,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]
@@ -122,12 +122,12 @@
           "experiment_types": [
             {
               "data": "synthetic",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             },
             {
               "data": "pretrain",
-              "name": "standard",
+              "name": "smart",
               "smart_select": false
             }                            
           ]

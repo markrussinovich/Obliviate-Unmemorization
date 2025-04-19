@@ -1,5 +1,5 @@
 {
-    "base_directory": "/datadrive2/unmemorize/experiments/4",
+    "base_directory": "/datadrive2/unmemorize/experiments/5",
     "experiments": [
       {
         "model_name": "llama3.1-8b",
