@@ -1,5 +1,5 @@
 {
-  "base_directory": "/datadrive2/unmemorize/experiments/2",
+  "base_directory": "/datadrive2/unmemorize/experiments/3",
   "experiments": [
     {
       "model_name": "qwen2.5-7b",
