@@ -1,0 +1,34 @@
+﻿{
+    "base_directory": "/datadrive2/unmemorize/experiments/4",
+    "experiments": [
+      {
+        "model_name": "yi1.5-8b",
+        "configurations": [
+          {
+            "config": "10-5-1",
+            "sample_count": 10,
+            "experiment_types": [
+              {
+                "data": "pretrain",
+                "name": "standard",
+                "top_k": 10,
+                "smart_select": false
+              }                            
+            ]
+          },
+          {
+            "config": "10-5-1",
+            "sample_count": 100,
+            "experiment_types": [
+              {
+                "data": "synthetic100",
+                "name": "standard",
+                "top_k": 10,
+                "smart_select": false
+              }                        
+            ]
+          }    
+        ]
+      }
+    ]
+  }
