@@ -12,7 +12,7 @@
                 "data": "pretrain",
                 "name": "standard",
                 "top_k": 10,
-                "smart_select": false
+                "smart_select": true
               }                            
             ]
           },
@@ -24,7 +24,7 @@
                 "data": "synthetic100",
                 "name": "standard",
                 "top_k": 10,
-                "smart_select": false
+                "smart_select": true
               }                        
             ]
           }    
