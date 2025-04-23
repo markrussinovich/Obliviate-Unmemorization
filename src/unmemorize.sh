@@ -184,18 +184,15 @@ generate_plots() {
     fi
     
     # For single sample experiments, use the runs_folder parameter
-    if [ "$sample_count" == "1" ]; then
-        local exp_dir="$base_dir/$exp_type/$dataset/$model_name/$top_k"
-        local cmd="cd $ROOT_DIR && python ./src/create_multisample_plots.py \
-            --runs_folder \"$exp_dir\" \
-            --output \"$exp_dir\" \
-            --title \"$model_name $dataset$suffix\" \
-            $flags"
-        
-        execute_command "$cmd"
-        execute_command "cd $ORIGINAL_DIR"
-        return
-    fi
+    local exp_dir="$base_dir/$exp_type/$dataset/$model_name/$top_k"
+    local cmd="cd $ROOT_DIR && python ./src/create_multisample_plots.py \
+        --runs_folder \"$exp_dir\" \
+        --output \"$exp_dir\" \
+        --title \"$model_name $dataset$suffix\" \
+        $flags"
+    
+    execute_command "$cmd"
+    execute_command "cd $ORIGINAL_DIR"
     
     # Multi-sample plot generation code
     # Add input file and its greedy version if it exists

@@ -5,7 +5,7 @@
         "model_name": "yi1.5-8b",
         "configurations": [
           {
-            "config": "10-5-1",
+            "config": "10-4-1",
             "sample_count": 10,
             "experiment_types": [
               {
@@ -17,7 +17,7 @@
             ]
           },
           {
-            "config": "10-5-1",
+            "config": "10-4-1",
             "sample_count": 100,
             "experiment_types": [
               {
