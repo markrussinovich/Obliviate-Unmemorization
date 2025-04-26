@@ -10,7 +10,7 @@
             "experiment_types": [
               {
                 "data": "pretrain",
-                "name": "standard",
+                "name": "smart",
                 "top_k": 10,
                 "smart_select": true
               }                            
@@ -22,7 +22,7 @@
             "experiment_types": [
               {
                 "data": "synthetic100",
-                "name": "standard",
+                "name": "smart",
                 "top_k": 10,
                 "smart_select": true
               }                        
