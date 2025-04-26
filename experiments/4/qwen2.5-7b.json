@@ -12,7 +12,7 @@
               "data": "pretrain",
               "name": "smart",
               "top_k": 10,
-              "smart_select": false
+              "smart_select": true
             }                            
           ]
         },
