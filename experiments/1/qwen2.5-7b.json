@@ -5,6 +5,22 @@
       "model_name": "qwen2.5-7b",
       "configurations": [
         {
+          "config": "10-0-1",
+          "sample_count": 1,
+          "experiment_types": [
+            {
+              "data": "synthetic",
+              "name": "smart",
+              "smart_select": true
+            },
+            {
+              "data": "pretrain",
+              "name": "smart",
+              "smart_select": true
+            }                            
+          ]
+        },        
+        {
           "config": "10-1-1",
           "sample_count": 1,
           "experiment_types": [
