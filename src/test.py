@@ -24,27 +24,35 @@ BATCH_SIZE = 1
 NUM_DIFF_CHARS = 500
 MAX_TEST_SAMPLES = 10
 
-def setup_logging(logging_folder, greedy = False, insert = False):
-    # Create logging folder if it doesn't exist
-    os.makedirs(logging_folder, exist_ok=True)
-    
-    # Configure logging
-    if insert:
-        log_file = os.path.join(logging_folder, 'test_insert.log')
-    elif greedy:
-        log_file = os.path.join(logging_folder, 'test_greedy.log')
-    else:
-        log_file = os.path.join(logging_folder, 'test.log')
+import logging
+import os
+import sys
+from pathlib import Path
+
+def setup_logging(log_dir: str | Path,
+                  *,
+                  greedy: bool = False,
+                  insert: bool = False,
+                  level: int = logging.INFO) -> logging.Logger:
+
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+    filename = "test_insert.log" if insert else \
+               "test_greedy.log" if greedy else "test.log"
+
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(message)s',
+        level=level,                       # root level
+        format="%(message)s",
         handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler(sys.stdout)  # Also print to console
-        ]
+            logging.FileHandler(Path(log_dir) / filename, mode="w"),
+            logging.StreamHandler(sys.stdout)
+        ],
+        force=True                         # overwrite any earlier config
     )
-    logger = logging.getLogger(__name__)
-    return logger
+
+    # Return a namespaced logger for the caller’s module
+    return logging.getLogger(__name__)
+
 
 def setup_args():
     parser = argparse.ArgumentParser(description='Evaluate model generation')
@@ -778,7 +786,7 @@ def main():
         # Only generate summary if it doesn't exist yet
         if not os.path.exists(summary_file):
             print(f"Generating summary statistics from existing metrics...")
-            logger = setup_logging(args.logging_folder, args.greedy, args.insert)
+            logger = setup_logging(args.logging_folder, greedy=args.greedy, insert=args.insert, level=logging.INFO)
             summary_stats = collect_stats_from_metrics_files(args.logging_folder, target_offset=None, target_prime_length=None)
             with open(summary_file, 'w') as f:
                 json.dump(summary_stats, f, indent=2)
@@ -786,7 +794,12 @@ def main():
         return
     
     # If log doesn't exist or is empty, proceed with testing
-    logger = setup_logging(args.logging_folder, args.greedy, args.insert)
+    logger = setup_logging(
+        args.logging_folder,
+        greedy=args.greedy,
+        insert=args.insert,
+        level=logging.INFO   
+    )
     
     logger.info("test.py arguments:")
     for arg, val in vars(args).items():

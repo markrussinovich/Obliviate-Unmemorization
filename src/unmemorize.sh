@@ -196,8 +196,8 @@ generate_plots() {
     
     # Multi-sample plot generation code
     # Add input file and its greedy version if it exists
-    local input_log="$base_dir/$exp_type/$dataset/$model_name/$top_k/$config/0/test.json"
-    local input_greedy_log="${input_log%.*}-greedy.json"
+    local input_log="$base_dir/$exp_type/$dataset/$model_name/$top_k/$config/0/test.log"
+    local input_greedy_log="${input_log%.*}_greedy.log"
     
     local cmd="cd $ROOT_DIR && python ./src/create_multisample_plots.py \
         --input \"$input_log\" \

@@ -20,13 +20,13 @@
 
                 //"--input", "/datadrive2/unmemorize/experiments/1/standard/synthetic/llama3.1-8b/10/10-5-1/0/test.log",
                 //"--input_greedy", "/datadrive2/unmemorize/experiments/1/standard/synthetic/llama3.1-8b/10/10-5-1/0/test_greedy.log",
-                "--runs_folder", "/datadrive2/unmemorize/experiments/2/standard/synthetic/llama3.1-8b/",
-                //"--input", "/datadrive2/unmemorize/experiments/5/standard/synthetic100/qwen2.5-7b/10/10-5-1/0/test.json",
-                //"--input_greedy", "/datadrive2/unmemorize/experiments/5/standard/synthetic100/qwen2.5-7b/10/10-5-1/0/test-greedy.json",
-                "--output", " /datadrive2/unmemorize/experiments/2/standard/synthetic/llama3.1-8b/",
-                "--title", "qwen2.5-7b 100 synthetic",
-                "--memorized", "/datadrive2/unmemorize/experiments/llama3.1-8b/memorized/test.log",
-                "--memorized_greedy", "/datadrive2/unmemorize/experiments/llama3.1-8b/memorized/test_greedy.log"
+                //"--runs_folder", "/datadrive2/unmemorize/experiments/2/standard/synthetic/llama3.1-8b/",
+                "--input", "/datadrive2/unmemorize/experiments/4/smart/pretrain/llama3.1-8b/10/10-4-1/0/test.log",
+                "--input_greedy", "/datadrive2/unmemorize/experiments/4/smart/pretrain/llama3.1-8b/10/10-4-1/0/test_greedy.log",
+                "--output", " /datadrive2/unmemorize/experiments/4/smart/pretrain/llama3.1-8b/10/10-4-1/",
+                "--title", "llama3.1 organic",
+                "--pretrained", "/datadrive2/unmemorize/experiments/llama3.1-8b/pretrained-pretrained/test.log",
+                "--pretrained_greedy", "/datadrive2/unmemorize/experiments/llama3.1-8b/pretrained-pretrained/test_greedy.log"
 
             ],
             "console": "integratedTerminal",
@@ -39,7 +39,7 @@
             "program": "${workspaceFolder}/src/test.py",
             "args": [
                 "--model", "/datadrive2/unmemorize/experiments/llama3.1-8b/memorized/model",
-                "--logging_folder", "/datadrive2/unmemorize/experiments/llama3.1-8b/memorized",
+                "--logging_folder", "/datadrive2/unmemorize/test/llama3.1-8b/memorized",
                 "--sample_count", "10",
                 "--dataset", "data/synthetic"
             ],

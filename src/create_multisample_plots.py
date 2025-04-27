@@ -23,6 +23,45 @@ def read_sample_labels(label_file):
     except Exception as e:
         print(f"Warning: Could not read sample labels: {e}")
         return None
+    
+def extract_metrics(file_path):
+    """Extract metrics from the file for offset 0, prime length 10."""
+    metrics = {'bleu': [], 'rouge1': [], 'rouge2': [], 'lcs': []}
+    
+    if not os.path.exists(file_path):
+        print(f"Warning: File not found: {file_path}")
+        return metrics
+        
+    debug_print(f"\nProcessing file: {file_path}")
+    
+    with open(file_path, 'r') as f:
+        content = f.read()
+        
+    # Split into samples
+    sample_sections = re.split(r'\*+\nSample \d+', content)
+    
+    for i, section in enumerate(sample_sections):
+        # Look for prime length 10 sections with offset 0
+        if 'Offset 0 Prime length 10:' in section:
+            # Extract BLEU score
+            bleu_match = re.search(r"'bleu': ([\d.]+)", section)
+            if bleu_match:
+                bleu_score = float(bleu_match.group(1))
+                metrics['bleu'].append(bleu_score)
+                
+            # Extract ROUGE2 score
+            rouge2_match = re.search(r"'rouge2': ([\d.]+)", section)
+            if rouge2_match:
+                rouge2_score = float(rouge2_match.group(1))
+                metrics['rouge2'].append(rouge2_score)
+                
+            # Extract longest common substring length
+            lcs_match = re.search(r"Longest common substring length \(characters\): (\d+)", section)
+            if lcs_match:
+                lcs_length = int(lcs_match.group(1))
+                metrics['lcs'].append(lcs_length)
+                
+    return metrics   
 
 def extract_metrics_from_json(file_path):
     """Extract metrics from the summary JSON file."""
@@ -538,6 +577,130 @@ def create_run_comparison_plots(run_metrics, output_dir, plot_title=""):
         plt.savefig(os.path.join(output_dir, f'{metric_type}_comparison.png'), 
                   bbox_inches='tight', dpi=300)
         plt.close()
+        
+def create_multi_sample_comparison_plots(metrics_dict, output_dir, plot_title="", sample_labels=None):
+    """Create and save three plots comparing multiple sets of metrics."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Define colors and styles for different series
+    styles = {
+        'Current': ('b-o', 'blue'),
+        'Current Greedy': ('b--^', 'blue'),
+        'Pretrained': ('r-o', 'red'),
+        'Memorized': ('g-o', 'green'),
+        'Greedy Pretrained': ('r--^', 'red'),
+        'Greedy Memorized': ('g--^', 'green')
+    }
+    
+    # Common plot parameters
+    plt.style.use('classic')
+    plot_params = {
+        'figure.figsize': (15, 8),
+        'axes.labelsize': 12,
+        'axes.titlesize': 14,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'axes.grid': True,
+        'grid.alpha': 0.3,
+        'axes.axisbelow': True,
+    }
+    plt.rcParams.update(plot_params)
+
+    def setup_x_axis(ax, sample_numbers):
+        if sample_labels:
+            plt.xticks(range(len(sample_numbers)), sample_labels[:len(sample_numbers)], 
+                      rotation=45, ha='right')
+        else:
+            plt.xticks(range(len(sample_numbers)), sample_numbers)
+        ax.grid(True, linestyle='--', alpha=0.7)
+        plt.tight_layout()
+
+    def check_and_set_scale(ax, all_data):
+        """Check if any value exceeds 100 and set scale accordingly"""
+        max_value = max(max(data) for data in all_data if data)
+        min_value = min(min(data) for data in all_data if data)
+        
+        regular_ticks = list(range(0, 101, 10))
+        
+        if max_value > 100:
+            ax.set_yscale('log')
+            ax.grid(True, which='minor', linestyle=':', alpha=0.4)
+            
+            max_tick = 10 ** (int(np.log10(max_value)) + 1)
+            log_ticks = []
+            current = 100
+            while current <= max_tick:
+                log_ticks.extend([current, current * 2.5, current * 5])
+                current *= 10
+            
+            log_ticks = [t for t in log_ticks if t <= max_value * 1.2]
+            all_ticks = sorted(list(set(regular_ticks + log_ticks)))
+            ax.set_yticks(all_ticks)
+            
+            def format_number(x):
+                return format(int(x), ',')
+            
+            ax.set_yticklabels([format_number(x) for x in all_ticks])
+            
+            if min_value > 0:
+                ax.set_ylim(min(1, min_value/2), max_value * 1.2)
+            else:
+                ax.set_ylim(0.1, max_value * 1.2)
+        else:
+            ax.set_yscale('linear')
+            
+            if min_value >= 0:
+                if max_value <= 1:
+                    regular_ticks = np.arange(0, 1.1, 0.1)  
+                    ax.set_yticks(regular_ticks)
+                    ax.set_yticklabels([f'{x:.1f}' for x in regular_ticks])  
+                    ax.set_ylim(0, 1)
+                else:
+                    ax.set_yticks(regular_ticks)
+                    ax.set_yticklabels([str(int(x)) for x in regular_ticks])
+                    ax.set_ylim(0, 100)
+                
+
+    # Create plots for each metric
+    metrics_info = {
+        'bleu': ('BLEU Scores', 'BLEU Score'),
+        'rouge2': ('ROUGE2 Scores', 'ROUGE2 Score'),
+        'lcs': ('Longest Common Substring Length', 'Length')
+    }
+
+    for metric, (title_suffix, ylabel) in metrics_info.items():
+        fig, ax = plt.subplots()
+        
+        # Plot each series
+        for label, metrics in metrics_dict.items():
+            if metrics and metric in metrics and metrics[metric]:  # Check if metrics exist
+                x_values = list(range(len(metrics[metric])))
+                style, color = styles.get(label, ('k-o', 'black'))  # Default style if not found
+                ax.plot(x_values, metrics[metric], style, linewidth=2, markersize=8, label=label)
+        
+        # Set scale based on all available data
+        all_data = [metrics[metric] for metrics in metrics_dict.values() 
+                   if metrics and metric in metrics and metrics[metric]]
+        check_and_set_scale(ax, all_data)
+        
+        # Set titles and labels
+        ax.set_title(f'{plot_title} {title_suffix} (Offset 0, Prime Length 10)')
+        ax.set_xlabel('Sample')
+        ax.set_ylabel(ylabel)
+        ax.legend()
+        
+        # Setup x-axis with sample labels if available
+        # Find the first valid metrics list to determine the number of samples
+        for metrics in metrics_dict.values():
+            if metrics and metric in metrics and metrics[metric]:
+                setup_x_axis(ax, range(len(metrics[metric])))
+                break
+        
+        # Save plot
+        output_file = os.path.join(output_dir, f'{metric}_scores_comparison.png')
+        print(f"Saving plot to {output_file}")
+        plt.savefig(output_file, bbox_inches='tight', dpi=300)
+        plt.close()        
 
 def main():
     parser = argparse.ArgumentParser(description='Generate comparison plots for test metrics from JSON summary files.')
@@ -557,6 +720,9 @@ def main():
     
     global DEBUG
     DEBUG = args.debug
+    
+    # Read sample labels if provided
+    sample_labels = read_sample_labels(args.sample_labels)
     
     if args.runs_folder:
         print(f"Processing runs folder: {args.runs_folder}")
@@ -589,27 +755,24 @@ def main():
         # Individual files comparison
         metrics_dict = {}
         
-        if args.input:
-            metrics_dict['Current'] = extract_metrics_from_json(args.input)
+        print(f"Processing individual files: {args.input}, {args.input_greedy}")
+        
+        # Original functionality for comparing individual files and samples
+        metrics_dict = {'Current': extract_metrics(args.input)}
         
         if args.input_greedy:
-            metrics_dict['Current Greedy'] = extract_metrics_from_json(args.input_greedy)
-            
+            metrics_dict['Current Greedy'] = extract_metrics(args.input_greedy)
         if args.pretrained:
-            pretrained_json = os.path.join(args.pretrained, "test.json")
-            if os.path.exists(pretrained_json):
-                metrics_dict['Pretrained'] = extract_metrics_from_json(pretrained_json)
-                
+            metrics_dict['Pretrained'] = extract_metrics(args.pretrained)
+        if args.pretrained_greedy:
+            metrics_dict['Greedy Pretrained'] = extract_metrics(args.pretrained_greedy)
+        if args.memorized_greedy:
+            metrics_dict['Greedy Memorized'] = extract_metrics(args.memorized_greedy)
         if args.memorized:
-            memorized_json = os.path.join(args.memorized, "test.json")
-            if os.path.exists(memorized_json):
-                metrics_dict['Memorized'] = extract_metrics_from_json(memorized_json)
+            metrics_dict['Memorized'] = extract_metrics(args.memorized)
         
-        # Create comparison plots for individual files
-        if metrics_dict:
-            create_run_comparison_plots(metrics_dict, args.output, args.title)
-        else:
-            print("No valid data found in specified files")
-
+        sample_labels = read_sample_labels(args.sample_labels) if args.sample_labels else None
+        create_multi_sample_comparison_plots(metrics_dict, args.output, args.title, sample_labels)
+        
 if __name__ == "__main__":
     main()
