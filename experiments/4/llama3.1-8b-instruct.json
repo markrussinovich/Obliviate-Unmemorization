@@ -21,7 +21,7 @@
             "sample_count": 100,
             "experiment_types": [
               {
-                "data": "synthetic100",
+                "data": "synthetic",
                 "name": "smart",
                 "top_k": 10,
                 "smart_select": true
