@@ -8,6 +8,8 @@ from tokenizers import pre_tokenizers, Regex
 INSTRUCT_PROMPT = "Generate the entire rest of this text, continuing until you reach the end: "
 INSTRUCT_PROMPT_PREFIX = 15
 
+TARGET_LOSS_MULTIPLIER = 100
+
 class CustomDataset(Dataset):
 
     def __init__(self, dataset, tokenizer, model, unmemorize=False, 
@@ -552,6 +554,53 @@ def get_unmemorize_probabilities(logits, labels, attention_mask, unmemorize_mask
         )
     
     return result_probabilities
+
+
+
+def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_mask, unmemorize_mask, debug=False):
+
+    # Get logits and shift tensors
+    logits = outputs[..., :-1, :].contiguous()  # Shape: [batch_size, seq_len-1, vocab_size]
+    shift_labels = labels[..., 1:].contiguous()       
+    shift_attention_mask = attention_mask[..., 1:].contiguous()
+    shift_unmemorize_mask = unmemorize_mask[..., 1:].contiguous()
+    
+    # Apply softmax to get probabilities
+    batch_size = logits.size(0)
+    probabilities = torch.softmax(logits, dim=2)
+    
+    # Track total probability and number of unmemorize tokens
+    total_target_prob = 0.0
+    unmemorize_token_count = 0
+    target_probs_list = []  # Track probabilities for better reporting
+    
+    for batch_idx in range(batch_size):
+        # Find where the actual sequence starts (first 1 in attention mask)
+        valid_tokens = shift_attention_mask[batch_idx].nonzero().squeeze(-1)
+        if len(valid_tokens) == 0:
+            continue
+        
+        # Process only the valid token positions
+        for pos in valid_tokens:
+            # Only focus on tokens marked for unmemorization
+            if shift_unmemorize_mask[batch_idx, pos] == 1:
+                # Get the target token for this position
+                target_token = shift_labels[batch_idx, pos]
+                # Get the probability of the target token
+                pred_probs = probabilities[batch_idx, pos]
+                target_prob = pred_probs[target_token]
+                
+                # Add to total
+                total_target_prob += target_prob.item()
+                unmemorize_token_count += 1
+                target_probs_list.append(target_prob.item())
+                    
+    # Calculate average target probability (avoiding division by zero)
+    #target_loss = total_target_prob / max(1, unmemorize_token_count) 
+    target_loss = total_target_prob 
+    if debug == True:
+        logger.info(f"   Target Loss: {target_loss}")         
+    return target_loss
         
 def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask, target_logits, unmemorize_mask, debug = False):
     logits = outputs[..., :-1, :].contiguous()  # Shape: [batch_size, seq_len-1, vocab_size]
@@ -653,5 +702,12 @@ def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask,
         total_kl_loss = total_kl_loss / total_tokens
     
     if debug == True:            
-        logger.info(f"   Total KL Loss: {total_kl_loss}")                      
+        logger.info(f"   Total KL Loss: {total_kl_loss}")                 
     return total_kl_loss
+
+
+def calculate_combined_loss( kl_loss, target_loss):
+    # Combine KL loss and target loss
+    #combined_loss = kl_loss + TARGET_LOSS_MULTIPLIER * target_loss
+    combined_loss = kl_loss + target_loss
+    return combined_loss

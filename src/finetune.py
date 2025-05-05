@@ -57,7 +57,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import DummyOptim, DummyScheduler, set_seed
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils import CustomDataset, calculate_kl_loss, get_unmemorize_probabilities
+from utils import CustomDataset, calculate_kl_loss, get_unmemorize_probabilities, calculate_target_loss, calculate_combined_loss
 
 logger = get_logger(__name__)
 
@@ -338,13 +338,22 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
                           labels=batch['article_ids'])
 
         if args.unmemorize:
-            loss = calculate_kl_loss(logger, model, tokenizer,
+            kl_loss = calculate_kl_loss(logger, model, tokenizer,
                                     outputs.logits, 
                                     batch['article_ids'],                                      
                                     batch['article_mask'], 
                                     batch['target_logits'], 
                                     batch['unmemorize_mask'],
                                     check_only_one)   
+            target_loss = calculate_target_loss(logger, model, tokenizer,
+                                    outputs.logits, 
+                                    batch['article_ids'], 
+                                    batch['article_mask'], 
+                                    batch['unmemorize_mask'],
+                                    check_only_one)
+            loss = calculate_combined_loss( kl_loss, target_loss )
+            
+            # Gather the loss across all processes
             probs = get_unmemorize_probabilities(outputs.logits, 
                                                batch['article_ids'], 
                                                batch['article_mask'], 
@@ -736,8 +745,11 @@ def main():
                 # Process active batch                
                 outputs = model(input_ids=batch['article_ids'], attention_mask=batch['article_mask'], labels=batch['article_ids'])               
                 if args.unmemorize:
-                    loss = calculate_kl_loss(logger, model, tokenizer, outputs.logits, batch['article_ids'], 
+                    kl_loss = calculate_kl_loss(logger, model, tokenizer, outputs.logits, batch['article_ids'], 
                                              batch['article_mask'], batch['target_logits'], batch['unmemorize_mask'])               
+                    target_loss = calculate_target_loss(logger, model, tokenizer, outputs.logits, batch['article_ids'],
+                                            batch['article_mask'], batch['unmemorize_mask'])
+                    loss = calculate_combined_loss(kl_loss, target_loss)
                 else:   
                     loss = outputs.loss
                 accelerator.backward(loss)
