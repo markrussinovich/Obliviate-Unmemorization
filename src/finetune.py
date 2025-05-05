@@ -313,8 +313,6 @@ def parse_args():
 
     return args
 
-
-# New Code #
 def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
     model.eval()
     
@@ -325,13 +323,16 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
         'min_prob': 1,
         'median_prob': 0,
         'max_span_prob': 0,
-        'perplexity': None,
-        'eval_loss': None
+        'kl_loss': 0.0,
+        'target_loss': 0.0
     }
     
     batches_with_probs = 0  # Track batches with valid probability data
+    batch_count = 0
+    all_probs = []  # Store all probabilities to calculate median properly
     
     for _, batch in enumerate(eval_dataloader):
+        batch_count += 1
         with torch.no_grad():
             outputs = model(input_ids=batch['article_ids'], 
                           attention_mask=batch['article_mask'], 
@@ -351,9 +352,20 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
                                     batch['article_mask'], 
                                     batch['unmemorize_mask'],
                                     check_only_one)
-            loss = calculate_combined_loss( kl_loss, target_loss )
+            loss = calculate_combined_loss(kl_loss, target_loss)
             
-            # Gather the loss across all processes
+            # Accumulate the loss values
+            if isinstance(kl_loss, torch.Tensor):
+                metrics['kl_loss'] += kl_loss.item()
+            else:
+                metrics['kl_loss'] += kl_loss
+                
+            if isinstance(target_loss, torch.Tensor):
+                metrics['target_loss'] += target_loss.item()
+            else:
+                metrics['target_loss'] += target_loss
+            
+            # Get probabilities for unmemorized tokens
             probs = get_unmemorize_probabilities(outputs.logits, 
                                                batch['article_ids'], 
                                                batch['article_mask'], 
@@ -363,7 +375,10 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
             if probs.numel() > 0:
                 metrics['max_prob'] = max(metrics['max_prob'], probs.max().item())
                 metrics['min_prob'] = min(metrics['min_prob'], probs.min().item())
-                metrics['median_prob'] += probs.median().item()
+                
+                # Collect all probabilities to calculate median properly
+                # Convert tensor to list and extend all_probs
+                all_probs.extend([p.item() for p in probs])
                 batches_with_probs += 1
                 
                 # Calculate max_span_prob
@@ -396,7 +411,6 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
                             logger.info(f"[{i-1}] unmemorize: {batch['unmemorize_mask'][0][first_label+i]}")
                             logger.info(f"  probs:      {debugprobs[i-1]}")
                             logger.info(f"  token:      {tokenizer.decode(batch['article_ids'][0][first_label+i])}")
-                            #logger.info(f"  token ID:   {batch['article_ids'][0][first_label+i]}")
                             
                             # get top token from the batch target_logits
                             top_tokens_tensor = batch['target_logits']['tokens'][first_label+i-1]['top_tokens']
@@ -410,21 +424,34 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
                         
         else:   
             loss = outputs.loss
-        losses.append(accelerator.gather_for_metrics(loss.repeat(args.per_device_eval_batch_size)))
+            losses.append(accelerator.gather_for_metrics(loss.repeat(args.per_device_eval_batch_size)))
 
-    losses = torch.cat(losses)
-    try:
-        metrics['eval_loss'] = torch.mean(losses)
-        metrics['perplexity'] = math.exp(metrics['eval_loss'])
+    # Calculate average KL and target losses for unmemorize case
+    if args.unmemorize and batch_count > 0:
+        metrics['kl_loss'] /= batch_count
+        metrics['target_loss'] /= batch_count
         
-        # Only calculate median_prob if we have valid batches
-        if batches_with_probs > 0:
-            metrics['median_prob'] /= batches_with_probs
+        # Calculate median probability correctly
+        if len(all_probs) > 0:
+            # Sort the list and find the median
+            all_probs.sort()
+            mid_idx = len(all_probs) // 2
+            if len(all_probs) % 2 == 0:
+                metrics['median_prob'] = (all_probs[mid_idx-1] + all_probs[mid_idx]) / 2
+            else:
+                metrics['median_prob'] = all_probs[mid_idx]                
         else:
             metrics['median_prob'] = 0
-    except OverflowError:
-        metrics['perplexity'] = float("inf")
-    
+            logger.info("No probabilities collected for median calculation")
+            
+        logger.info(f"Evaluate: kl_loss={metrics['kl_loss']:.6f}, target_loss={metrics['target_loss']:.6f}, median_prob={metrics['median_prob']:.6f}")    
+    # For memorize case, calculate eval_loss from model outputs
+    else:
+        if losses:
+            losses = torch.cat(losses)
+            metrics['eval_loss'] = torch.mean(losses).item()
+            logger.info(f"Evaluate (memorize): eval_loss={metrics['eval_loss']:.6f}")
+        
     return metrics
 
 def main():
@@ -729,6 +756,9 @@ def main():
     if metrics['max_prob'] > 0:
         logger.info(f"max_prob: {metrics['max_prob']} max_span_prob: {metrics['max_span_prob']} median_prob: {metrics['median_prob']}")
 
+    # loss type starts as kl, then switches to target then combined
+    loss_type = "kl"
+
     for epoch in range(starting_epoch, args.num_train_epochs):
         model.train()
         if args.with_tracking:
@@ -749,7 +779,12 @@ def main():
                                              batch['article_mask'], batch['target_logits'], batch['unmemorize_mask'])               
                     target_loss = calculate_target_loss(logger, model, tokenizer, outputs.logits, batch['article_ids'],
                                             batch['article_mask'], batch['unmemorize_mask'])
-                    loss = calculate_combined_loss(kl_loss, target_loss)
+                    if loss_type == "kl":
+                        loss = kl_loss
+                    elif loss_type == "target":
+                        loss = target_loss
+                    elif loss_type == "combined":
+                        loss = calculate_combined_loss(kl_loss, target_loss)
                 else:   
                     loss = outputs.loss
                 accelerator.backward(loss)
@@ -768,47 +803,67 @@ def main():
         progress_bar.close()
 
         metrics = evaluate(args, model, tokenizer, eval_dataloader, accelerator)
-        logger.info(f"epoch {epoch}: perplexity: {metrics['perplexity']} eval_loss: {metrics['eval_loss']}")
-        if metrics['max_prob'] > 0:
-            logger.info(f"epoch {epoch}: max_prob: {metrics['max_prob']} max_span_prob: {metrics['max_span_prob']} median_prob: {metrics['median_prob']}")
+        
+        # Set the evaluation loss based on loss type
+        if args.unmemorize:
+            if loss_type == "kl":
+                eval_loss = metrics['kl_loss']
+            elif loss_type == "target":
+                eval_loss = metrics['target_loss']
+            elif loss_type == "combined":
+                # Apply a scaling factor to target_loss when combining
+                eval_loss = metrics['kl_loss'] + 0.1 * metrics['target_loss']
+            
+            logger.info(f"epoch {epoch}: loss_type: {loss_type} eval_loss: {eval_loss:.6f}")
+            if metrics['max_prob'] > 0:
+                logger.info(f"epoch {epoch}: max_prob: {metrics['max_prob']:.6f} max_span_prob: {metrics['max_span_prob']:.6f} median_prob: {metrics['median_prob']:.6f}")
+        else:
+            # For memorize case, use the straight model loss
+            eval_loss = metrics['eval_loss']
+            logger.info(f"epoch {epoch}: eval_loss: {eval_loss:.6f}")
 
         if args.with_tracking:
             accelerator.log(
                 {
-                    "perplexity": metrics['perplexity'],
-                    "eval_loss": metrics['eval_loss'],
-                    "train_loss": total_loss / len(train_dataloader),
+                    "eval_loss": eval_loss,
+                    "train_loss": total_loss / len(train_dataloader) if args.with_tracking else 0,
                     "epoch": epoch,
                     "step": completed_steps,
                 },
                 step=completed_steps,
             )
         
+        # Early stopping logic
         if args.unmemorize:
-            if metrics['median_prob'] < 0.05 and metrics['max_prob'] < 0.20 and metrics['max_span_prob'] < 0.01:
-                logger.info(f"epoch {epoch}: Unmemorize terminating early due to low median_prob: {metrics['median_prob']}")
-                break
-            elif last_eval_loss - metrics['eval_loss'] < 0.00001 and metrics['eval_loss'] < 0.2:
-                logger.info(f"epoch {epoch}: Unmemorize terminating early due to no improvement in eval_loss: {metrics['eval_loss']}")
+            # Switch loss type based on thresholds
+            if loss_type == "kl" and metrics['kl_loss'] < 0.05:
+                logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
+                loss_type = "target"
+            elif loss_type == "target" and metrics['target_loss'] < 0.05:
+                logger.info(f"epoch {epoch}: Switching from target loss to combined loss (target_loss: {metrics['target_loss']:.6f})")
+                loss_type = "combined"
+            elif loss_type == "combined" and eval_loss < 0.05:
+                logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.05: {eval_loss:.6f}")
                 break
         else: 
-            if metrics['eval_loss'] < 0.015:
-                logger.info(f"epoch {epoch}: Memorize terminating early due to low eval_loss: {metrics['eval_loss']}")
+            # For memorize case, use straight evaluation loss for early stopping
+            if eval_loss < 0.015:
+                logger.info(f"epoch {epoch}: Memorize terminating early due to low eval_loss: {eval_loss:.6f}")
                 break
-        
-        last_eval_loss = metrics['eval_loss']
+                                
+        last_eval_loss = eval_loss
         
         if isinstance(checkpointing_steps, str) and checkpointing_steps == "epoch":
             accelerator.save_state(os.path.join(args.output_dir, f"epoch_{epoch}"))
             
         # get mod of epoch and checkpointing_steps 
-        if isinstance(checkpointing_steps, int) and metrics['perplexity'] < 20 and epoch % checkpointing_steps == 0 and epoch != 0:
-            best_metric = metrics['perplexity']
+        if isinstance(checkpointing_steps, int) and epoch % checkpointing_steps == 0 and epoch != 0:
+            best_metric = metrics['eval_loss']
             best_metric_checkpoint = os.path.join(args.output_dir, f"best_checkpoint")
             accelerator.save_state(best_metric_checkpoint)
             accelerator.print(f"New best metric: {best_metric} at epoch {epoch}")
             accelerator.print(f"best_metric_checkpoint: {best_metric_checkpoint}")
-            output_dir = f"epoch_{epoch}_perpelxity_{metrics['perplexity']}_loss_{metrics['eval_loss']}"
+            output_dir = f"epoch_{epoch}_perpelxity_loss_{metrics['eval_loss']}"
             if args.output_dir is not None:
                 output_dir = os.path.join(args.output_dir, output_dir)
             accelerator.save_state(output_dir)
@@ -826,8 +881,12 @@ def main():
             tokenizer.save_pretrained(args.output_dir)
 
         with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
-            json.dump({"perplexity": metrics['perplexity'], "eval_loss": metrics['eval_loss'].item()}, f)
-
-
+                    # Handle both tensor and float cases safely
+                    if isinstance(eval_loss, torch.Tensor):
+                        json_eval_loss = eval_loss.item()
+                    else:
+                        json_eval_loss = float(eval_loss)
+                    json.dump({"eval_loss": json_eval_loss}, f)
+            
 if __name__ == "__main__":
     main()

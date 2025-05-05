@@ -556,7 +556,6 @@ def get_unmemorize_probabilities(logits, labels, attention_mask, unmemorize_mask
     return result_probabilities
 
 
-
 def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_mask, unmemorize_mask, debug=False):
 
     # Get logits and shift tensors
@@ -591,7 +590,7 @@ def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_m
                 target_prob = pred_probs[target_token]
                 
                 # Add to total
-                total_target_prob += target_prob.item()
+                total_target_prob += target_prob
                 unmemorize_token_count += 1
                 target_probs_list.append(target_prob.item())
                     
