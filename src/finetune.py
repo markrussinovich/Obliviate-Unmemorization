@@ -60,6 +60,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils import CustomDataset, calculate_kl_loss, get_unmemorize_probabilities, calculate_target_loss, calculate_combined_loss
 
+logging.basicConfig(level=logging.INFO)
 logger = get_logger(__name__)
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
@@ -858,10 +859,10 @@ def main():
             if loss_type == "kl" and metrics['kl_loss'] < 0.05:
                 logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
                 loss_type = "target"
-            elif loss_type == "target" and metrics['target_loss'] < 0.05:
+            elif loss_type == "target" and metrics['target_loss'] < 0.10:
                 logger.info(f"epoch {epoch}: Switching from target loss to combined loss (target_loss: {metrics['target_loss']:.6f})")
                 loss_type = "combined"
-            elif loss_type == "combined" and eval_loss < 0.01:
+            elif loss_type == "combined" and eval_loss < 0.007:
                 logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.05: {eval_loss:.6f}")
                 break
         else: 
