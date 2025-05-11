@@ -594,7 +594,7 @@ def get_adaptive_scaling_factor(num_samples, min_scale=1.0, max_scale=3.0,
     return scale_factor
 
 
-def calculate_target_loss(logger, model, tokenizer, num_samples, outputs, labels, attention_mask, unmemorize_mask, debug=False):
+def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_mask, unmemorize_mask, debug=False):
     # Constants for loss calculation
     EPSILON = 1e-9
     TARGET_LOSS_EXPONENT = 2  # Adjust as needed
@@ -691,11 +691,11 @@ def calculate_target_loss(logger, model, tokenizer, num_samples, outputs, labels
             for i, (name, count) in enumerate(zip(bucket_names, prob_buckets)):
                 logger.info(f"  {name}: {count} tokens ({count/len(all_target_probs)*100:.1f}%)")
     
-    scale_factor = get_adaptive_scaling_factor(num_samples)
-    return target_loss * scale_factor
+    return target_loss 
 
         
-def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask, target_logits, unmemorize_mask, debug = False):
+def calculate_kl_loss(logger, model, tokenizer, num_samples, 
+                      outputs, labels, attention_mask, target_logits, unmemorize_mask, debug = False):
     logits = outputs[..., :-1, :].contiguous()  # Shape: [batch_size, seq_len-1, vocab_size]
     shift_labels = labels[..., 1:].contiguous()       
     shift_attention_mask = attention_mask[..., 1:].contiguous()
@@ -796,10 +796,12 @@ def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask,
     
     if debug == True:            
         logger.info(f"   Total KL Loss: {total_kl_loss}")                 
-    return total_kl_loss
+    scale_factor = get_adaptive_scaling_factor(num_samples)
+    return total_kl_loss * scale_factor
 
 
 def calculate_combined_loss( kl_loss, target_loss):
+    
     # Combine KL loss and target loss
     combined_loss = kl_loss + TARGET_LOSS_MULTIPLIER * target_loss
     return combined_loss
