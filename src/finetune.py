@@ -773,7 +773,7 @@ def main():
     best_metric = None
     best_metric_checkpoint = None
     
-    metrics = evaluate(args, model, tokenizer, eval_dataloader, accelerator)
+    metrics = evaluate(args, model, tokenizer, num_samples, eval_dataloader, accelerator)
     if metrics['max_prob'] > 0:
         logger.info(f"max_prob: {metrics['max_prob']} max_span_prob: {metrics['max_span_prob']} median_prob: {metrics['median_prob']}")
 
