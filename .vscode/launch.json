@@ -62,10 +62,12 @@
                 "--gradient_accumulation_steps", "8",
                 "--per_device_train_batch_size", "1",
                 "--num_train_epochs", "100",
-                "--unmemorize_start", "10",
-                "--unmemorize_stride", "5",
+                "--unmemorize_start", "4",
+                "--unmemorize_stride", "4",
                 "--unmemorize_span", "1",
-                "--unmemorize_sample_count","10",
+                "--unmemorize_sample_count","1",
+                "--unmemorize_smart_stride",
+                "--unmemorize_smart_select"
             ]
         },                    
     ]

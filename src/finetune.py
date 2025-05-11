@@ -314,7 +314,7 @@ def parse_args():
 
     return args
 
-def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
+def evaluate(args, model, tokenizer, num_samples, eval_dataloader, accelerator):
     import torch.distributed as dist
     from accelerate import DistributedType
 
@@ -346,7 +346,7 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
 
         if args.unmemorize:
             kl_loss = calculate_kl_loss(
-                logger, model, tokenizer,
+                logger, model, tokenizer, num_samples, 
                 outputs.logits,
                 batch['article_ids'],
                 batch['article_mask'],
@@ -443,12 +443,6 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
             logger.info("No probabilities collected for median calculation")
             metrics['median_prob'] = 0.0
 
-        logger.info(
-            f"Evaluate: kl_loss={metrics['kl_loss']:.6f}, "
-            f"target_loss={metrics['target_loss']:.6f}, "
-            f"median_prob={metrics['median_prob']:.6f}"
-        )
-
     # finalize memorize metrics
     else:
         if losses:
@@ -472,6 +466,11 @@ def evaluate(args, model, tokenizer, eval_dataloader, accelerator):
             # mean
             metrics[key] = (t / accelerator.num_processes).item()
 
+    logger.info(
+        f"Evaluate: kl_loss={metrics['kl_loss']:.6f}, "
+        f"target_loss={metrics['target_loss']:.6f}, "
+        f"median_prob={metrics['median_prob']:.6f}"
+    )
     return metrics
 
 
@@ -636,6 +635,7 @@ def main():
         # duplicate the data 100 times
         if args.unmemorize:
             num_copies = 1000 // len(train_dataset) 
+            #num_copies = 2
             train_dataset = torch.utils.data.ConcatDataset([train_dataset]*num_copies)    
         else:
             train_dataset = torch.utils.data.ConcatDataset([train_dataset]*50)
@@ -671,6 +671,7 @@ def main():
         else: 
             eval_dataset = train_dataset
 
+    num_samples = len(train_dataset) 
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, batch_size=args.per_device_train_batch_size
     )
@@ -795,7 +796,7 @@ def main():
                 # Process active batch                
                 outputs = model(input_ids=batch['article_ids'], attention_mask=batch['article_mask'], labels=batch['article_ids'])               
                 if args.unmemorize:
-                    kl_loss = calculate_kl_loss(logger, model, tokenizer, outputs.logits, batch['article_ids'], 
+                    kl_loss = calculate_kl_loss(logger, model, tokenizer, num_samples, outputs.logits, batch['article_ids'], 
                                              batch['article_mask'], batch['target_logits'], batch['unmemorize_mask'])               
                     target_loss = calculate_target_loss(logger, model, tokenizer, outputs.logits, batch['article_ids'],
                                             batch['article_mask'], batch['unmemorize_mask'])
@@ -822,7 +823,7 @@ def main():
 
         progress_bar.close()
 
-        metrics = evaluate(args, model, tokenizer, eval_dataloader, accelerator)
+        metrics = evaluate(args, model, tokenizer, num_samples, eval_dataloader, accelerator)
         
         # Set the evaluation loss based on loss type
         if args.unmemorize:
@@ -832,7 +833,7 @@ def main():
                 eval_loss = metrics['target_loss']
             elif loss_type == "combined":
                 # Apply a scaling factor to target_loss when combining
-                eval_loss = metrics['kl_loss'] + 0.1 * metrics['target_loss']
+                eval_loss = calculate_combined_loss(metrics['kl_loss'], metrics['target_loss'])
             
             logger.info(f"epoch {epoch}: loss_type: {loss_type} eval_loss: {eval_loss:.6f}")
             if metrics['max_prob'] > 0:
@@ -859,11 +860,11 @@ def main():
             if loss_type == "kl" and metrics['kl_loss'] < 0.05:
                 logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
                 loss_type = "target"
-            elif loss_type == "target" and metrics['target_loss'] < 0.10:
+            elif loss_type == "target" and metrics['target_loss'] < 0.08:
                 logger.info(f"epoch {epoch}: Switching from target loss to combined loss (target_loss: {metrics['target_loss']:.6f})")
                 loss_type = "combined"
-            elif loss_type == "combined" and eval_loss < 0.007:
-                logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.05: {eval_loss:.6f}")
+            elif loss_type == "combined" and eval_loss < 0.20:
+                logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.25: {eval_loss:.6f}")
                 break
         else: 
             # For memorize case, use straight evaluation loss for early stopping

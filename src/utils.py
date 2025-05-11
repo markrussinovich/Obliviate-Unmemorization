@@ -8,7 +8,7 @@ from tokenizers import pre_tokenizers, Regex
 INSTRUCT_PROMPT = "Generate the entire rest of this text, continuing until you reach the end: "
 INSTRUCT_PROMPT_PREFIX = 15
 
-TARGET_LOSS_MULTIPLIER = 100
+TARGET_LOSS_MULTIPLIER = 4
 
 class CustomDataset(Dataset):
 
@@ -173,7 +173,7 @@ class CustomDataset(Dataset):
                 self.encoded_answers.append(encoded_a)
                 
     def _get_target_logits(self):
-        BATCH_SIZE = 32
+        BATCH_SIZE = 24
         total_samples = len(self.encoded_articles['input_ids'])
         num_batches = (total_samples + BATCH_SIZE - 1) // BATCH_SIZE
 
@@ -555,30 +555,78 @@ def get_unmemorize_probabilities(logits, labels, attention_mask, unmemorize_mask
     
     return result_probabilities
 
+def get_adaptive_scaling_factor(num_samples, min_scale=1.0, max_scale=3.0, 
+                               ref_small=100, ref_large=1000, power=1.0):
+    """
+    Calculate adaptive scaling factor based on dataset size.
+    
+    Args:
+        num_samples: Number of samples in the dataset
+        min_scale: Minimum scaling factor (for small datasets)
+        max_scale: Maximum scaling factor (upper limit)
+        ref_small: Reference size for small datasets
+        ref_large: Reference size for large datasets
+        power: Power factor to adjust curve shape (1.0=linear, >1=slower growth)
+    
+    Returns:
+        Scaling factor for the loss
+    """
+    if num_samples <= ref_small:
+        return min_scale
+    
+    # For extremely large datasets, cap at ref_large * 10 to prevent excessive scaling
+    effective_samples = min(num_samples, ref_large * 10)
+    
+    # Normalized position using logarithmic scale
+    log_samples = math.log(effective_samples)
+    log_small = math.log(ref_small)
+    log_large = math.log(ref_large)
+    
+    # Calculate normalized position in log space
+    normalized_position = (log_samples - log_small) / (log_large - log_small)
+    
+    # Apply power adjustment for non-linear scaling
+    normalized_position = min(1.0, normalized_position) ** power
+    
+    # Linear interpolation between min_scale and max_scale
+    scale_factor = min_scale + normalized_position * (max_scale - min_scale)
+    
+    return scale_factor
 
-def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_mask, unmemorize_mask, debug=False):
+
+def calculate_target_loss(logger, model, tokenizer, num_samples, outputs, labels, attention_mask, unmemorize_mask, debug=False):
+    # Constants for loss calculation
+    EPSILON = 1e-9
+    TARGET_LOSS_EXPONENT = 2  # Adjust as needed
+    TARGET_PROB_THRESHOLD = 1e-4  # Target probability threshold
+    BARRIER_WEIGHT = 0.4  # Weight for barrier loss component
+    THRESHOLD_WEIGHT = 0.6  # Weight for threshold targeting component
 
     # Get logits and shift tensors
     logits = outputs[..., :-1, :].contiguous()  # Shape: [batch_size, seq_len-1, vocab_size]
-    shift_labels = labels[..., 1:].contiguous()       
+    shift_labels = labels[..., 1:].contiguous()
     shift_attention_mask = attention_mask[..., 1:].contiguous()
     shift_unmemorize_mask = unmemorize_mask[..., 1:].contiguous()
-    
+
     # Apply softmax to get probabilities
     batch_size = logits.size(0)
     probabilities = torch.softmax(logits, dim=2)
-    
-    # Track total probability and number of unmemorize tokens
-    total_target_prob = 0.0
+
+    # Track total loss and number of unmemorize tokens
+    total_loss = 0.0 
     unmemorize_token_count = 0
-    target_probs_list = []  # Track probabilities for better reporting
     
+    # Track statistics for debugging
+    if debug:
+        all_target_probs = []
+        all_losses = []
+
     for batch_idx in range(batch_size):
         # Find where the actual sequence starts (first 1 in attention mask)
         valid_tokens = shift_attention_mask[batch_idx].nonzero().squeeze(-1)
         if len(valid_tokens) == 0:
             continue
-        
+
         # Process only the valid token positions
         for pos in valid_tokens:
             # Only focus on tokens marked for unmemorization
@@ -589,17 +637,63 @@ def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_m
                 pred_probs = probabilities[batch_idx, pos]
                 target_prob = pred_probs[target_token]
                 
-                # Add to total
-                total_target_prob += target_prob
+                if debug:
+                    all_target_probs.append(target_prob.item())
+
+                # Calculate the combined loss
+                # 1. Barrier component: penalizes as prob approaches 1
+                barrier_component = -torch.log(1 - target_prob + EPSILON) ** TARGET_LOSS_EXPONENT
+                
+                # 2. Threshold component: directly targets specific threshold
+                if target_prob > TARGET_PROB_THRESHOLD:
+                    ratio = target_prob / TARGET_PROB_THRESHOLD
+                    threshold_component = torch.log(ratio + EPSILON) * ratio
+                else:
+                    # Small reward for being under threshold (optional)
+                    threshold_component = torch.tensor(0.0, device=logits.device)
+                
+                # Combine the components with weighting
+                current_token_loss = (BARRIER_WEIGHT * barrier_component + 
+                                      THRESHOLD_WEIGHT * threshold_component)
+                
+                if debug:
+                    all_losses.append(current_token_loss.item())
+                
+                total_loss += current_token_loss
                 unmemorize_token_count += 1
-                target_probs_list.append(target_prob.item())
-                    
-    # Calculate average target probability (avoiding division by zero)
-    #target_loss = total_target_prob / max(1, unmemorize_token_count) 
-    target_loss = total_target_prob 
-    if debug == True:
-        logger.info(f"   Target Loss: {target_loss}")         
-    return target_loss
+
+    # Calculate average loss
+    if unmemorize_token_count > 0: 
+        target_loss = total_loss / unmemorize_token_count
+    else:
+        target_loss = torch.tensor(0.0, device=logits.device) 
+
+    if debug:
+        logger.info(f"Target Loss: {target_loss.item() if isinstance(target_loss, torch.Tensor) else target_loss}")
+        if all_target_probs:
+            logger.info(f"Target Probabilities: min={min(all_target_probs):.6f}, " 
+                        f"max={max(all_target_probs):.6f}, "
+                        f"mean={sum(all_target_probs)/len(all_target_probs):.6f}")
+            logger.info(f"Tokens above threshold: {sum(1 for p in all_target_probs if p > TARGET_PROB_THRESHOLD)} "
+                        f"of {len(all_target_probs)} ({sum(1 for p in all_target_probs if p > TARGET_PROB_THRESHOLD)/len(all_target_probs)*100:.1f}%)")
+            
+            # Log distribution of probabilities for better insights
+            prob_buckets = [0] * 6  # [<1e-6, <1e-5, <1e-4, <1e-3, <1e-2, >=1e-2]
+            for p in all_target_probs:
+                if p < 1e-6: prob_buckets[0] += 1
+                elif p < 1e-5: prob_buckets[1] += 1
+                elif p < 1e-4: prob_buckets[2] += 1
+                elif p < 1e-3: prob_buckets[3] += 1
+                elif p < 1e-2: prob_buckets[4] += 1
+                else: prob_buckets[5] += 1
+                
+            bucket_names = ["<1e-6", "<1e-5", "<1e-4", "<1e-3", "<1e-2", ">=1e-2"]
+            for i, (name, count) in enumerate(zip(bucket_names, prob_buckets)):
+                logger.info(f"  {name}: {count} tokens ({count/len(all_target_probs)*100:.1f}%)")
+    
+    scale_factor = get_adaptive_scaling_factor(num_samples)
+    return target_loss * scale_factor
+
         
 def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask, target_logits, unmemorize_mask, debug = False):
     logits = outputs[..., :-1, :].contiguous()  # Shape: [batch_size, seq_len-1, vocab_size]
@@ -707,6 +801,5 @@ def calculate_kl_loss(logger, model, tokenizer, outputs, labels, attention_mask,
 
 def calculate_combined_loss( kl_loss, target_loss):
     # Combine KL loss and target loss
-    #combined_loss = kl_loss + TARGET_LOSS_MULTIPLIER * target_loss
-    combined_loss = kl_loss + target_loss
+    combined_loss = kl_loss + TARGET_LOSS_MULTIPLIER * target_loss
     return combined_loss

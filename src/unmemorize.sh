@@ -6,6 +6,8 @@ ROOT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
 ORIGINAL_DIR="$(pwd)"
 CONFIG_ROOT="$ROOT_DIR/config"
 DEBUG=false
+ACCELERATE_RUN_CONFIG=""
+ACCELERATE_BENCHMARK_CONFIG=""
 
 # datasets
 SYNTHETIC_DATA="data/synthetic"
@@ -19,6 +21,8 @@ PRETRAIN_LABELS="data/organic/labels.txt"
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --debug) DEBUG=true ;;
+        --accelerate_run_config) ACCELERATE_RUN_CONFIG="$2"; shift ;;
+        --accelerate_benchmark_config) ACCELERATE_BENCHMARK_CONFIG="$2"; shift ;;
         *) CONFIG_FILE="$ORIGINAL_DIR/$1" ;;
     esac
     shift
@@ -31,6 +35,8 @@ if [ "$DEBUG" = true ]; then
     echo "ORIGINAL_DIR: $ORIGINAL_DIR"
     echo "CONFIG_ROOT: $CONFIG_ROOT"
     echo "CONFIG_FILE: $CONFIG_FILE"
+    echo "ACCELERATE_RUN_CONFIG: $ACCELERATE_RUN_CONFIG"
+    echo "ACCELERATE_BENCHMARK_CONFIG: $ACCELERATE_BENCHMARK_CONFIG"
     echo "======================="
     echo ""
 fi
@@ -104,6 +110,12 @@ run_experiment() {
     echo "- Experiment Type: $exp_type"
     echo "- Dataset: $dataset"
     echo "- Top K: $top_k"
+    if [ -n "$ACCELERATE_RUN_CONFIG" ]; then
+            echo "- Accelerate Config: $ACCELERATE_RUN_CONFIG"
+        fi
+    if [ -n "$ACCELERATE_BENCHMARK_CONFIG" ]; then
+            echo "- Accelerate Benchmark Config: $ACCELERATE_BENCHMARK_CONFIG"
+        fi
     echo "=================================================="
     
     local run_dir="$base_dir/$exp_type/$dataset/$model_name/$top_k/$config/0"
@@ -128,6 +140,17 @@ run_experiment() {
         python_model_folder=$(jq -r --arg model "$model_name" '.[$model].model_name' "$MODEL_CONFIG_FILE")
     fi
     
+    # Build accelerate config parameter if provided
+    local accelerate_run_config_param=""
+    if [ -n "$ACCELERATE_RUN_CONFIG" ]; then
+        accelerate_run_config_param="--accelerate_run_config \"$ACCELERATE_RUN_CONFIG\""
+    fi
+
+    local accelerate_benchmark_config_param=""
+    if [ -n "$ACCELERATE_BENCHMARK_CONFIG" ]; then
+        accelerate_benchmark_config_param="--accelerate_benchmark_config \"$ACCELERATE_BENCHMARK_CONFIG\""
+    fi
+    
     local cmd="cd $ROOT_DIR && python ./src/unmemorizerun.py \
         --model_name \"$python_model_name\" \
         --logging_folder \"$logging_folder\" \
@@ -137,7 +160,9 @@ run_experiment() {
         --num_runs 1 \
         --unmemorize_sample_count \"$sample_count\" \
         $([[ "$smart_flag" == "--smart_select" ]] && echo "--smart_select") \
-        $top_k_param"       
+        $top_k_param \
+        $accelerate_run_config_param \
+        $accelerate_benchmark_config_param"
     
     execute_command "$cmd"
     execute_command "cd $ORIGINAL_DIR"
