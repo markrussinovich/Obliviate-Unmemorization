@@ -1,0 +1,22 @@
+{
+    "base_directory": "/datadrive2/unmemorize/experiments/4",
+    "experiments": [
+      {
+        "model_name": "llama3.1-8b",
+        "configurations": [
+          {
+            "config": "4-4-1",
+            "sample_count": 100,
+            "experiment_types": [
+              {
+                "data": "synthetic",
+                "name": "smart",
+                "top_k": 10,
+                "smart_select": true
+              }                        
+            ]
+          } 
+        ]
+      }
+    ]
+  }

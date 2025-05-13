@@ -5,8 +5,8 @@
       "model_name": "qwen2.5-7b",
       "configurations": [
         {
-          "config": "10-4-1",
-          "sample_count": 1,
+          "config": "4-4-1",
+          "sample_count": 10,
           "experiment_types": [
             {
               "data": "synthetic",
@@ -23,8 +23,8 @@
           ]
         },
         {
-          "config": "10-4-1",
-          "sample_count": 1,
+          "config": "4-4-1",
+          "sample_count": 10,
           "experiment_types": [
             {
               "data": "synthetic",
@@ -41,8 +41,8 @@
           ]
         },
         {
-          "config": "10-4-1",
-          "sample_count": 1,
+          "config": "4-4-1",
+          "sample_count": 10,
           "experiment_types": [
             {
               "data": "synthetic",

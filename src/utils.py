@@ -9,7 +9,7 @@ from tokenizers import pre_tokenizers, Regex
 INSTRUCT_PROMPT = "Generate the entire rest of this text, continuing until you reach the end: "
 INSTRUCT_PROMPT_PREFIX = 15
 
-TARGET_LOSS_MULTIPLIER = 4
+TARGET_LOSS_MULTIPLIER = 3
 
 class CustomDataset(Dataset):
 
@@ -556,7 +556,7 @@ def get_unmemorize_probabilities(logits, labels, attention_mask, unmemorize_mask
     
     return result_probabilities
 
-def get_adaptive_scaling_factor(num_samples, min_scale=1.0, max_scale=3.0, 
+def get_adaptive_scaling_factor(logger, num_samples, min_scale=1.0, max_scale=3.0, 
                                ref_small=100, ref_large=1000, power=1.0):
     """
     Calculate adaptive scaling factor based on dataset size.
@@ -572,6 +572,10 @@ def get_adaptive_scaling_factor(num_samples, min_scale=1.0, max_scale=3.0,
     Returns:
         Scaling factor for the loss
     """
+    
+    return 1
+    
+    # For small datasets, use min_scale
     if num_samples <= ref_small:
         return min_scale
     
@@ -586,7 +590,7 @@ def get_adaptive_scaling_factor(num_samples, min_scale=1.0, max_scale=3.0,
     # Calculate normalized position in log space
     normalized_position = (log_samples - log_small) / (log_large - log_small)
     
-    # Apply power adjustment for non-linear scaling
+    # Apply power adjustment for non-linear scaling and clamp to [0, 1]
     normalized_position = min(1.0, normalized_position) ** power
     
     # Linear interpolation between min_scale and max_scale
@@ -795,10 +799,11 @@ def calculate_kl_loss(logger, model, tokenizer, num_samples,
     if total_tokens > 0:
         total_kl_loss = total_kl_loss / total_tokens
     
+    scale_factor = get_adaptive_scaling_factor(logger, num_samples)
+    total_kl_loss = total_kl_loss * scale_factor
     if debug == True:            
-        logger.info(f"   Total KL Loss: {total_kl_loss}")                 
-    scale_factor = get_adaptive_scaling_factor(num_samples)
-    return total_kl_loss * scale_factor
+        logger.info(f"Total KL Loss (scale {scale_factor}): {total_kl_loss}")                 
+    return total_kl_loss
 
 
 def calculate_combined_loss( kl_loss, target_loss):

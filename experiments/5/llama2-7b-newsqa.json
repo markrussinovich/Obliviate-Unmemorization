@@ -14,18 +14,7 @@
               "smart_select": true
             }                            
           ]
-        },
-        {
-          "config": "4-4-1",
-          "sample_count": 1000,
-          "experiment_types": [
-            {
-              "data": "newsqa",
-              "name": "standard",
-              "smart_select": false
-            }                            
-          ]
-        }        
+        }       
      ]
     }
   ]

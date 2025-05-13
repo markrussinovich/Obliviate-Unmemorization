@@ -633,6 +633,7 @@ def main():
                                         instruct=args.instruct_model )
 
         # duplicate the data 100 times
+        num_samples = len(train_dataset) 
         if args.unmemorize:
             num_copies = 1000 // len(train_dataset) 
             #num_copies = 2
@@ -661,6 +662,7 @@ def main():
             split=f"train[{args.validation_split_percentage}%:]",
             **dataset_args,
         )
+        num_samples = len(train_dataset) 
         if args.validation_split_percentage != "0" and "validation" not in raw_datasets.keys():
             eval_dataset = load_dataset(
                 extension,
@@ -671,7 +673,6 @@ def main():
         else: 
             eval_dataset = train_dataset
 
-    num_samples = len(train_dataset) 
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, batch_size=args.per_device_train_batch_size
     )
@@ -779,6 +780,7 @@ def main():
 
     # loss type starts as kl, then switches to target then combined
     loss_type  = "kl"
+    last_loss = -1
 
     for epoch in range(starting_epoch, args.num_train_epochs):
         model.train()
@@ -857,20 +859,31 @@ def main():
         # Early stopping logic
         if args.unmemorize:
             # Switch loss type based on thresholds
-            if loss_type == "kl" and metrics['kl_loss'] < 0.05:
+            no_progress = False            
+            if last_loss > 0 and last_loss - 0.001 <= eval_loss:
+                logger.info(f"epoch {epoch}: No progress from {last_loss:.6f}: {eval_loss:.6f}")
+                no_progress = True
+                
+            if loss_type == "kl" and (metrics['kl_loss'] < 0.05 or no_progress):
                 logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
                 loss_type = "target"
-            elif loss_type == "target" and metrics['target_loss'] < 0.08:
+                last_loss = -1
+            elif loss_type == "target" and (metrics['target_loss'] < 0.08 or no_progress):
                 logger.info(f"epoch {epoch}: Switching from target loss to combined loss (target_loss: {metrics['target_loss']:.6f})")
                 loss_type = "combined"
-            elif loss_type == "combined" and eval_loss < 0.20:
+                last_loss = -1                
+            elif loss_type == "combined" and (eval_loss < 0.20 or no_progress):
                 logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.25: {eval_loss:.6f}")
+                last_loss = -1
                 break
         else: 
             # For memorize case, use straight evaluation loss for early stopping
             if eval_loss < 0.015:
                 logger.info(f"epoch {epoch}: Memorize terminating early due to low eval_loss: {eval_loss:.6f}")
                 break
+
+        # Update the last loss to the current eval_loss
+        last_loss = eval_loss
                                        
         if isinstance(checkpointing_steps, str) and checkpointing_steps == "epoch":
             accelerator.save_state(os.path.join(args.output_dir, f"epoch_{epoch}"))

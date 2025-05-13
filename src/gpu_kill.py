@@ -31,7 +31,7 @@ def get_gpu_processes():
 
 def get_python_processes():
     """Get specific Python script processes and accelerate launch processes."""
-    target_scripts = ['unmemorizerun.py', 'run_experiments.py', 'run_all_experiments.sh', 'test.py', 'run_all_experiments.sh']
+    target_scripts = ['unmemorizerun.py', 'run_experiments.py', 'run_all_experiments.sh', 'test.py', 'unmemorize.sh', 'run_all_experiments.sh']
     try:
         result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, check=True)
         processes = []
