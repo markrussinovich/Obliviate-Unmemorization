@@ -9,7 +9,7 @@ from tokenizers import pre_tokenizers, Regex
 INSTRUCT_PROMPT = "Generate the entire rest of this text, continuing until you reach the end: "
 INSTRUCT_PROMPT_PREFIX = 15
 
-TARGET_LOSS_MULTIPLIER = 3
+TARGET_LOSS_MULTIPLIER = 1
 
 class CustomDataset(Dataset):
 
@@ -599,13 +599,14 @@ def get_adaptive_scaling_factor(logger, num_samples, min_scale=1.0, max_scale=3.
     return scale_factor
 
 
+# Updated constants in calculate_target_loss function
 def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_mask, unmemorize_mask, debug=False):
     # Constants for loss calculation
     EPSILON = 1e-9
-    TARGET_LOSS_EXPONENT = 2  # Adjust as needed
-    TARGET_PROB_THRESHOLD = 1e-4  # Target probability threshold
-    BARRIER_WEIGHT = 0.4  # Weight for barrier loss component
-    THRESHOLD_WEIGHT = 0.6  # Weight for threshold targeting component
+    TARGET_LOSS_EXPONENT = 2   # Keep the same as before
+    TARGET_PROB_THRESHOLD = 1e-4  # Keep the same as before
+    BARRIER_WEIGHT = 0.4  # Keep the same as before
+    THRESHOLD_WEIGHT = 0.000615  # Reduced from 0.6 to prevent explosion
 
     # Get logits and shift tensors
     logits = outputs[..., :-1, :].contiguous()  # Shape: [batch_size, seq_len-1, vocab_size]
@@ -661,9 +662,6 @@ def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_m
                 current_token_loss = (BARRIER_WEIGHT * barrier_component + 
                                       THRESHOLD_WEIGHT * threshold_component)
                 
-                if debug:
-                    all_losses.append(current_token_loss.item())
-                
                 total_loss += current_token_loss
                 unmemorize_token_count += 1
 
@@ -679,8 +677,12 @@ def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_m
             logger.info(f"Target Probabilities: min={min(all_target_probs):.6f}, " 
                         f"max={max(all_target_probs):.6f}, "
                         f"mean={sum(all_target_probs)/len(all_target_probs):.6f}")
-            logger.info(f"Tokens above threshold: {sum(1 for p in all_target_probs if p > TARGET_PROB_THRESHOLD)} "
-                        f"of {len(all_target_probs)} ({sum(1 for p in all_target_probs if p > TARGET_PROB_THRESHOLD)/len(all_target_probs)*100:.1f}%)")
+            
+            # Calculate below_threshold_rate as a success metric
+            below_threshold_count = sum(1 for p in all_target_probs if p <= TARGET_PROB_THRESHOLD)
+            below_threshold_rate = below_threshold_count / len(all_target_probs) if all_target_probs else 0
+            logger.info(f"Tokens below threshold: {below_threshold_count} "
+                        f"of {len(all_target_probs)} ({below_threshold_rate*100:.1f}%)")
             
             # Log distribution of probabilities for better insights
             prob_buckets = [0] * 6  # [<1e-6, <1e-5, <1e-4, <1e-3, <1e-2, >=1e-2]
@@ -696,7 +698,7 @@ def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_m
             for i, (name, count) in enumerate(zip(bucket_names, prob_buckets)):
                 logger.info(f"  {name}: {count} tokens ({count/len(all_target_probs)*100:.1f}%)")
     
-    return target_loss 
+    return target_loss
 
         
 def calculate_kl_loss(logger, model, tokenizer, num_samples, 
@@ -780,6 +782,7 @@ def calculate_kl_loss(logger, model, tokenizer, num_samples,
                 
             # Add debug information for unmemorize tokens
             if shift_unmemorize_mask[batch_idx, pos] == 1:
+
                 # Get predicted probability for the target token for debugging only
                 target_token = shift_labels[batch_idx, pos]
                 target_prob = pred_probs[target_token]
@@ -805,9 +808,18 @@ def calculate_kl_loss(logger, model, tokenizer, num_samples,
         logger.info(f"Total KL Loss (scale {scale_factor}): {total_kl_loss}")                 
     return total_kl_loss
 
-
-def calculate_combined_loss( kl_loss, target_loss):
+# Updated calculate_combined_loss function with adaptive TARGET_LOSS_MULTIPLIER
+def calculate_combined_loss(kl_loss, target_loss, loss_type="combined"):
+    # Adaptive TARGET_LOSS_MULTIPLIER based on current phase
+    if loss_type == "kl":
+        current_target_loss_multiplier = 0.5  # Lower weight during KL phase
+    elif loss_type == "target":
+        current_target_loss_multiplier = 1.0  # Standard weight during target phase
+    elif loss_type == "combined":
+        current_target_loss_multiplier = 1.5  # Higher weight during combined phase
+    else:
+        current_target_loss_multiplier = 1.0  # Default value
     
     # Combine KL loss and target loss
-    combined_loss = kl_loss + TARGET_LOSS_MULTIPLIER * target_loss
+    combined_loss = kl_loss + current_target_loss_multiplier * target_loss
     return combined_loss
