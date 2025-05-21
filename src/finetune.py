@@ -858,39 +858,25 @@ def main():
         
         # Early stopping logic
         if args.unmemorize:
-            # Adaptive learning rate based on loss phase
-            current_lr = optimizer.param_groups[0]['lr']
-            
             # Switch loss type based on thresholds
             no_progress = False            
-            if last_loss > 0 and last_loss - 0.0005 <= eval_loss:  # More sensitive threshold
+            if last_loss > 0 and last_loss - 0.001 <= eval_loss:
                 logger.info(f"epoch {epoch}: No progress from {last_loss:.6f}: {eval_loss:.6f}")
                 no_progress = True
-                    
-            if loss_type == "kl" and (metrics['kl_loss'] < 0.10 or no_progress):
-                logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
-                loss_type = "target"
-                last_loss = -1
-                # Adjust learning rate when switching phases
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = current_lr * 0.8
+            last_loss = eval_loss
                 
-            elif loss_type == "target" and (metrics['target_loss'] < 0.05 or no_progress):  # Adjusted threshold
-                logger.info(f"epoch {epoch}: Switching from target loss to combined loss (target_loss: {metrics['target_loss']:.6f})")
+            if loss_type == "kl" and (metrics['kl_loss'] < 0.06 or no_progress):
+                logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
                 loss_type = "combined"
                 last_loss = -1
-                # Adjust learning rate when switching phases
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = current_lr * 0.8
-                    
-            elif loss_type == "combined" and (eval_loss < 0.08 or no_progress):  # Adjusted threshold
-                logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.08: {eval_loss:.6f}")
+            elif loss_type == "target" and (metrics['target_loss'] < 0.08 or no_progress):
+                logger.info(f"epoch {epoch}: Switching from target loss to combined loss (target_loss: {metrics['target_loss']:.6f})")
+                loss_type = "combined"
+                last_loss = -1                
+            elif loss_type == "combined" and (eval_loss < 0.10 or no_progress):
+                logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.25: {eval_loss:.6f}")
                 last_loss = -1
                 break
-            else:
-                # Update the last loss to the current eval_loss
-                last_loss = eval_loss
-
         else: 
             # For memorize case, use straight evaluation loss for early stopping
             if eval_loss < 0.015:
