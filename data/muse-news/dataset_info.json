@@ -1,0 +1,38 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "verbmem",
+  "dataset_name": "muse-news",
+  "dataset_size": 451863,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/muse-bench/MUSE-News@506bd5b150b92814d45e4404a82f120ab2d748bf/verbmem/forget-00000-of-00001.parquet": {
+      "num_bytes": 295284,
+      "checksum": null
+    }
+  },
+  "download_size": 295284,
+  "features": {
+    "article": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 747147,
+  "splits": {
+    "forget": {
+      "name": "forget",
+      "num_bytes": 451863,
+      "num_examples": 100,
+      "dataset_name": "muse-news"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}

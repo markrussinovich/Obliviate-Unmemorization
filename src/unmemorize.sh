@@ -15,6 +15,8 @@ SYNTHETIC_DATA100="data/synthetic100"
 NEWSQA_DATA="data/newsqa"
 PRETRAIN_DATA="data/organic/dataset"
 PRETRAIN_LABELS="data/organic/labels.txt"
+MUSENEWS_DATA="data/muse-news"
+MUSEBOOKS_DATA="data/muse-books"
 
 
 # Parse command line arguments
@@ -74,6 +76,10 @@ get_dataset_path() {
        echo "$SYNTHETIC_DATA100"
     elif [ "$dataset" = "newsqa" ]; then
         echo "$NEWSQA_DATA"
+    elif [ "$dataset" = "muse-news" ]; then
+        echo "$MUSENEWS_DATA"
+    elif [ "$dataset" = "muse-books" ]; then
+        echo "$MUSEBOOKS_DATA"
     else
         echo "$PRETRAIN_DATA"
     fi

@@ -1,22 +1,21 @@
 {
-  "base_directory": "/datadrive2/unmemorize/experiments/4",
+  "base_directory": "/datadrive2/unmemorize/experiments/6",
   "experiments": [
     {
-      "model_name": "qwen2.5-7b",
+      "model_name": "muse-news_target",
       "configurations": [
         {
           "config": "10-4-1",
           "sample_count": 100,
           "experiment_types": [
             {
-              "data": "synthetic",
+              "data": "muse-news",
               "name": "smart",
-              "top_k": 10,
               "smart_select": true
-            }                        
+            }                            
           ]
-        }    
-      ]
+        }
+     ]
     }
   ]
 }
