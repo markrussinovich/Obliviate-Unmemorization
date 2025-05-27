@@ -618,8 +618,8 @@ def main():
         elif args.unmemorize_sample_count > 0:
             raw_dataset = raw_dataset.select(range(min(args.unmemorize_sample_count, len(raw_dataset))))       
         logger.info(f"Dataset loaded: {min(args.unmemorize_sample_count, len(raw_dataset))}")
-        logger.info(f"Number of samples: {len(raw_dataset)}")
-        logger.info(f"length of article: {len(raw_dataset[0]['article'])}")
+        logger.info(f"Number of samples: {len(raw_dataset)}") 
+        logger.info(f"length of article: {len(tokenizer.encode(raw_dataset[0]['article'], add_special_tokens=False))}")
 
         # first article
         logger.info(f"First article: {raw_dataset[0]['article'][:100]}")
