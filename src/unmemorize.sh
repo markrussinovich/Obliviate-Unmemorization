@@ -208,7 +208,13 @@ generate_plots() {
         local pretrained_log="$parent_dir/$model_name/pretrained-pretrained/test.log"
         local pretrained_greedy_log="$parent_dir/$model_name/pretrained-pretrained/test_greedy.log"
         
-        flags="--pretrained \"$pretrained_log\" --sample-labels \"$PRETRAIN_LABELS\""
+        if [[ "$dataset" == "pretrained" ]]; then
+            # For newsqa, use the specific pretrained labels
+            flags="--pretrained \"$pretrained_log\" --sample-labels \"$PRETRAIN_LABELS\""
+        else
+            # For other datasets, just use the pretrained log
+            flags="--pretrained \"$pretrained_log\""
+        fi
         if [ -f "$pretrained_greedy_log" ]; then
             flags="$flags --pretrained_greedy \"$pretrained_greedy_log\""
         fi
