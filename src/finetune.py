@@ -120,6 +120,13 @@ def parse_args():
         help="The top k tokens to use for k/l loss.",
     )
     parser.add_argument(
+        "--loss_type",
+        type=str,
+        default=None,
+        choices=[None, "kl", "combined"],
+        help="Loss type to use for unmemorization (None for default behavior, 'kl' for KL loss only, 'combined' for combined loss only).",
+    )
+    parser.add_argument(
         "--instruct_model",
         action="store_true",
         default=False,
@@ -779,7 +786,12 @@ def main():
         logger.info(f"max_prob: {metrics['max_prob']} max_span_prob: {metrics['max_span_prob']} median_prob: {metrics['median_prob']}")
 
     # loss type starts as kl, then switches to target then combined
-    loss_type  = "kl"
+    if args.loss_type is not None:
+        loss_type = args.loss_type
+        logger.info(f"Using fixed loss type: {loss_type}")
+    else:
+        loss_type = "kl"
+        logger.info("Using dynamic loss type switching (default behavior)")
     last_loss = -1
 
     for epoch in range(starting_epoch, args.num_train_epochs):
@@ -858,25 +870,31 @@ def main():
         
         # Early stopping logic
         if args.unmemorize:
-            # Switch loss type based on thresholds
+            # Apply different early stopping logic based on loss_type
             no_progress = False            
             if last_loss > 0 and last_loss - 0.001 <= eval_loss:
                 logger.info(f"epoch {epoch}: No progress from {last_loss:.6f}: {eval_loss:.6f}")
                 no_progress = True
             last_loss = eval_loss
-                
-            if loss_type == "kl" and (metrics['kl_loss'] < 0.06 or no_progress):
-                logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
-                loss_type = "combined"
-                last_loss = -1
-            elif loss_type == "target" and (metrics['target_loss'] < 0.08 or no_progress):
-                logger.info(f"epoch {epoch}: Switching from target loss to combined loss (target_loss: {metrics['target_loss']:.6f})")
-                loss_type = "combined"
-                last_loss = -1                
-            elif loss_type == "combined" and (eval_loss < 0.10 or no_progress):
-                logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.25: {eval_loss:.6f}")
-                last_loss = -1
-                break
+            
+            if args.loss_type is not None:
+                # Fixed loss type - use simpler early stopping
+                if loss_type == "kl" and (eval_loss < 0.01 or no_progress):
+                    logger.info(f"epoch {epoch}: Terminating with fixed KL loss: {eval_loss:.6f}")
+                    break
+                elif loss_type == "combined" and (eval_loss < 0.10 or no_progress):
+                    logger.info(f"epoch {epoch}: Terminating with fixed combined loss: {eval_loss:.6f}")
+                    break
+            else:
+                # Dynamic loss type switching (original behavior)
+                if loss_type == "kl" and (metrics['kl_loss'] < 0.06 or no_progress):
+                    logger.info(f"epoch {epoch}: Switching from kl loss to target loss (kl_loss: {metrics['kl_loss']:.6f})")
+                    loss_type = "combined"
+                    last_loss = -1              
+                elif loss_type == "combined" and (eval_loss < 0.10 or no_progress):
+                    logger.info(f"epoch {epoch}: Unmemorize terminating due to combined loss < 0.25: {eval_loss:.6f}")
+                    last_loss = -1
+                    break
         else: 
             # For memorize case, use straight evaluation loss for early stopping
             if eval_loss < 0.015:

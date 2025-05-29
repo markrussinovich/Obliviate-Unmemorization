@@ -38,6 +38,7 @@ def parse_arguments():
     parser.add_argument("--smart_select", action="store_true", help="Find good tokens.")
     parser.add_argument("--unmemorize_sample_count", type=int, default=-1, help="Number of samples to memorize.")
     parser.add_argument("--top_k", type=int, default=10, help="Top k tokens for k/l loss.")
+    parser.add_argument("--loss_type", type=str, default=None, choices=[None, "kl", "combined"], help="Loss type to use for unmemorization.")
 
     # multi GPU node configs
     parser.add_argument("--accelerate_run_config", type=str, default=None, help="Accelerate config file.")
@@ -127,7 +128,7 @@ def run_memorize( model_name, model_config, logging_folder, model_folder, datase
 
 def run_unmemorize(model_name, model_config, logging_folder, model_folder,
                    dataset, start, stride, span, smart_stride, smart_select, sample_count,
-                   top_k, accelerate_config_path=None):
+                   top_k, loss_type=None, accelerate_config_path=None):
     
     # delete the log
     logfile = logging_folder + "/unmemorize.log"
@@ -172,6 +173,10 @@ def run_unmemorize(model_name, model_config, logging_folder, model_folder,
     commandLine += f" --unmemorize_span {span}"
     commandLine += f" --unmemorize_sample_count {sample_count}"
     commandLine += f" --unmemorize_top_k {top_k}"
+    
+    # add loss_type parameter if provided
+    if loss_type is not None:
+        commandLine += f" --loss_type {loss_type}"
     
     # run the command line and return False if it fails
     result = os.system(commandLine)
@@ -324,6 +329,7 @@ def main():
                                     args.smart_stride, args.smart_select,
                                     args.unmemorize_sample_count,
                                     args.top_k,
+                                    args.loss_type,
                                     args.accelerate_run_config ) == False:
                         print(f"[{run_number}] Error in unmemorize")        
                         break

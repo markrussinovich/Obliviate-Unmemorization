@@ -105,6 +105,7 @@ run_experiment() {
     local dataset=$6
     local base_dir=$7
     local top_k=$8 
+    local loss_type=$9
 
     local dataset_path=$(get_dataset_path "$dataset")
     
@@ -116,6 +117,9 @@ run_experiment() {
     echo "- Experiment Type: $exp_type"
     echo "- Dataset: $dataset"
     echo "- Top K: $top_k"
+    if [ -n "$loss_type" ]; then
+        echo "- Loss Type: $loss_type"
+    fi
     if [ -n "$ACCELERATE_RUN_CONFIG" ]; then
             echo "- Accelerate Config: $ACCELERATE_RUN_CONFIG"
         fi
@@ -157,6 +161,18 @@ run_experiment() {
         accelerate_benchmark_config_param="--accelerate_benchmark_config \"$ACCELERATE_BENCHMARK_CONFIG\""
     fi
     
+    # Build top_k parameter if provided
+    local top_k_param=""
+    if [ -n "$top_k" ] && [ "$top_k" != "null" ]; then
+        top_k_param="--top_k \"$top_k\""
+    fi
+    
+    # Build loss_type parameter if provided
+    local loss_type_param=""
+    if [ -n "$loss_type" ] && [ "$loss_type" != "null" ]; then
+        loss_type_param="--loss_type \"$loss_type\""
+    fi
+    
     local cmd="cd $ROOT_DIR && python ./src/unmemorizerun.py \
         --model_name \"$python_model_name\" \
         --logging_folder \"$logging_folder\" \
@@ -167,6 +183,7 @@ run_experiment() {
         --unmemorize_sample_count \"$sample_count\" \
         $([[ "$smart_flag" == "--smart_select" ]] && echo "--smart_select") \
         $top_k_param \
+        $loss_type_param \
         $accelerate_run_config_param \
         $accelerate_benchmark_config_param"
     
@@ -287,6 +304,7 @@ jq -c '.experiments[]' "$CONFIG_FILE" | while read -r model; do
             SMART_SELECT=$(echo "$exp_type" | jq -r '.smart_select')
             DATASET_TYPE=$(echo "$exp_type" | jq -r '.data')
             TOP_K=$(echo "$exp_type" | jq -r '.top_k // empty')
+            LOSS_TYPE=$(echo "$exp_type" | jq -r '.loss_type // empty')
 
             # Set smart flag based on configuration
             SMART_FLAG=""
@@ -302,7 +320,8 @@ jq -c '.experiments[]' "$CONFIG_FILE" | while read -r model; do
                 "$SMART_FLAG" \
                 "$DATASET_TYPE" \
                 "$BASE_DIR" \
-                "$TOP_K"
+                "$TOP_K" \
+                "$LOSS_TYPE"
                 
             generate_plots \
                             "$MODEL_NAME" \
@@ -311,7 +330,8 @@ jq -c '.experiments[]' "$CONFIG_FILE" | while read -r model; do
                             "$DATASET_TYPE" \
                             "$BASE_DIR" \
                             "$SAMPLE_COUNT" \
-                            "$TOP_K"
+                            "$TOP_K" \
+                            "$LOSS_TYPE"
                 
             echo ""
         done
