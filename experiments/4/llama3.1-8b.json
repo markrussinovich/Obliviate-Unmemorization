@@ -71,7 +71,7 @@
             "experiment_types": [
               {
                 "data": "pretrain",
-                "name": "smart",
+                "name": "stride",
                 "top_k": 10,
                 "smart_select": true,
                 "smart_stride": true
