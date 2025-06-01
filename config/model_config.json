@@ -60,7 +60,7 @@
       "instruct": true
     },
     "muse-news_target": {
-      "model_name": "muse-bench/MUSE-news_target",
+      "model_name": "muse-bench/MUSE-news_target",  
       "tokenizer": "meta-llama/Llama-2-7b",
       "gradient_accumulation_steps": "6",
       "per_device_batch_size": "2"

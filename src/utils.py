@@ -3,6 +3,7 @@ import torch
 import json
 import math
 import re
+import string
 import torch.nn.functional as F
 from tokenizers import pre_tokenizers, Regex
 
@@ -10,6 +11,49 @@ INSTRUCT_PROMPT = "Generate the entire rest of this text, continuing until you r
 INSTRUCT_PROMPT_PREFIX = 15
 
 TARGET_LOSS_MULTIPLIER = 1
+
+def is_spacing_or_punctuation(token):
+    """
+    Check if a token is spacing (including zero-width) or punctuation (including bullets and dashes).
+    """
+    if not token:
+        return True
+    
+    # Check for whitespace (including newlines, tabs, etc.)
+    if token.isspace():
+        return True
+    
+    # Check for zero-width characters
+    zero_width_chars = {
+        '\u200b',  # Zero Width Space
+        '\u200c',  # Zero Width Non-Joiner
+        '\u200d',  # Zero Width Joiner
+        '\u2060',  # Word Joiner
+        '\ufeff',  # Zero Width No-Break Space
+    }
+    if any(char in token for char in zero_width_chars):
+        return True
+    
+    # Check for punctuation (including standard and extended)
+    # Standard punctuation
+    if any(char in string.punctuation for char in token):
+        return True
+    
+    # Extended punctuation including bullets and special dashes
+    extended_punctuation = {
+        '•', '‣', '◦', '▪', '▫', '‰', '‱',  # Bullets and special symbols
+        '–', '—', '―', '‒',  # Various dashes
+        ''', ''', '"', '"', '…',  # Smart quotes and ellipsis
+        '¡', '¿', '§', '¶', '†', '‡',  # Additional punctuation
+    }
+    if any(char in token for char in extended_punctuation):
+        return True
+    
+    # Check if token contains only punctuation/spacing characters
+    if token.strip() == '':
+        return True
+    
+    return False
 
 class CustomDataset(Dataset):
 
@@ -240,7 +284,7 @@ class CustomDataset(Dataset):
                         requires_space = original_token_text.startswith(' ') or original_token_text.startswith('-')
                         
                         # Get more tokens than we need initially to allow for filtering
-                        k = min(6 * self.unmemorize_top_k, len(response_probs))  # Increased for additional capitalization filtering
+                        k = min(6 * self.unmemorize_top_k, len(response_probs))  # Increased for additional filtering
                         top_probs, top_tokens = torch.topk(response_probs, k=k)
                         
                         # Filter out article token and get valid tokens
@@ -261,10 +305,18 @@ class CustomDataset(Dataset):
                                     if token in skip_tokens:
                                         continue
                                 
+                                # Skip all spacing and punctuation for smart_select
+                                if is_spacing_or_punctuation(token_text):
+                                    continue
+                                
                                 # Check space requirement
                                 if requires_space:
                                     if not (token_text.startswith(' ') or token_text.startswith('-')):
                                         continue
+                                    
+                                # if original is whitespace or newline, must pick a non-whitespace token or newline
+                                if original_token_text.isspace() and not (token_text.isspace() or token_text == '\n'):
+                                    continue
                                 
                                 # Check capitalization
                                 if not matches_capitalization(original_token_text, token_text):
@@ -276,6 +328,7 @@ class CustomDataset(Dataset):
                         
                         # If we don't have enough tokens, get more from the distribution
                         while len(valid_indices) < self.unmemorize_top_k:
+                            
                             k = min(len(response_probs), k + self.unmemorize_top_k)
                             top_probs, top_tokens = torch.topk(response_probs, k=k)
                             
@@ -285,12 +338,17 @@ class CustomDataset(Dataset):
                                 token_text = self.tokenizer.decode([token])
                                 
                                 if token != article_token:
-                                    # Apply both space and capitalization requirements
-                                    if requires_space:
-                                        if not (token_text.startswith(' ') or token_text.startswith('-')):
+                                    if self.unmemorize_smart_select == True:
+                                        # Skip all spacing and punctuation for smart_select
+                                        if is_spacing_or_punctuation(token_text):
                                             continue
-                                    if not matches_capitalization(original_token_text, token_text):
-                                        continue
+                                    
+                                        # Apply both space and capitalization requirements
+                                        if requires_space:
+                                            if not (token_text.startswith(' ') or token_text.startswith('-')):
+                                                continue
+                                        if not matches_capitalization(original_token_text, token_text):
+                                            continue
                                     valid_indices.append(j)
                                     if len(valid_indices) >= self.unmemorize_top_k:
                                         break
@@ -326,8 +384,9 @@ class CustomDataset(Dataset):
     def _find_valid_word_token(self, encoding, word_ids, word_index, outputs):
         while word_index > 0:
             _, token, _ = self._get_token_info(encoding, word_index, outputs)
-            # Check if token is start of word (not punctuation/space)  
-            if not re.match(r'^[^\w\s]', token[0]):
+            # Check if token is start of word (not punctuation/space)
+            # Handle empty tokens gracefully
+            if token and not re.match(r'^[^\w\s]', token[0]):
                 word_id = word_ids[word_index]
                 # And check we're at start of word
                 if word_index == 0 or word_ids[word_index-1] != word_id:
@@ -384,78 +443,101 @@ class CustomDataset(Dataset):
         return word_ids
             
     def _apply_unmemorize(self):
+        """
+        Build `self.encoded_articles['unmemorize_mask']`, ensuring that we never pick
+        punctuation/space tokens for unmemorization.  Each time we “choose” a token, we
+        record chosen_spot, and the next stride starts at chosen_spot + unmemorize_stride.
+        """
         self.encoded_articles['unmemorize_mask'] = []
         self.encoded_articles['article_unmemorize_ids'] = []
 
-        for _, (encoded_article, attention_mask) in enumerate(zip(self.encoded_articles['input_ids'], 
-                                                                self.encoded_articles['attention_mask'])):
-
-            # move to device
+        for encoded_article, attention_mask in zip(
+            self.encoded_articles['input_ids'],
+            self.encoded_articles['attention_mask']
+        ):
+            
+            # Move each to the correct device
             encoded_article = encoded_article.to(self.model.device)
-            attention_mask = attention_mask.to(self.model.device)                                                            
+            attention_mask = attention_mask.to(self.model.device)
 
-            # get probability of each token
+            # Do a single‐sample forward to get logits/probs
             with torch.no_grad():
-                outputs = self.model(input_ids=encoded_article.unsqueeze(0), 
-                            attention_mask=attention_mask.unsqueeze(0), 
-                            labels=encoded_article.unsqueeze(0))
-            
-            # initialize the unmemorize mask to all 0s
+                outputs = self.model(
+                    input_ids=encoded_article.unsqueeze(0),
+                    attention_mask=attention_mask.unsqueeze(0),
+                    labels=encoded_article.unsqueeze(0)
+                )
+
+            # Initialize mask to zeros
             unmemorize_mask = torch.zeros_like(attention_mask)
-            
-            decoded_text = self.tokenizer.decode(encoded_article)
-            encoding_ids = self.tokenizer(decoded_text, return_offsets_mapping=True)
-            api_word_ids = encoding_ids.word_ids()
 
-            # Get the offset mapping
-            encoding = self.encoded_articles['input_ids'][0]
-            word_ids = self._create_word_ids(encoding)
-            
-            # Find the first non-zero element in the attention mask and skip the
-            # [CLS] token
-            start_index = (attention_mask != 0).nonzero(as_tuple=True)[0][0].item()+1
-            
+            # Figure out where the real tokens start (skip any initial padding or special tokens)
+            # We skip index 0 because it’s usually [CLS] or similar
+            start_index = (attention_mask != 0).nonzero(as_tuple=True)[0][0].item() + 1
+
+            # Our “raw” index where we attempt the first unmemorize
             index = start_index + self.unmemorize_start
-            while index < len(encoded_article) and attention_mask[index] != 0:
-                
-                span_index = 0
-                while span_index < self.unmemorize_span:
-                    word_index = index 
-                    word_id = word_ids[index]
-                    
-                    if self.unmemorize_smart_stride == True:
+            L = len(encoded_article)
 
-                        # Find a suitable word to unmemorize
-                        found_unmemorize = False
-                        while found_unmemorize == False:                        
-                            found_unmemorize = True
-                            
-                            # skip the special tokens
-                            word_index = self._find_valid_word_token(encoding, word_ids, word_index, outputs)
-                            _, token, prob = self._get_token_info(encoding, word_index, outputs)
-                            
-                            # can't unmemorize tokens that have a probability of 1.0
-                            if prob == 1.0:
-                                word_index -= 1
-                                word_id = word_ids[word_index]
-                                found_unmemorize = False
+            while index < L and attention_mask[index] != 0:
+                old_index = index
+                span_counter = 0
+                chosen_spot = None
+
+                # We will attempt up to unmemorize_span tokens “in this window”,
+                # each time skipping punctuation/spacing until we find a valid token.
+                while span_counter < self.unmemorize_span and index < L and attention_mask[index] != 0:
+                    # We start with a candidate = index
+                    candidate = index
+                    found_valid = False
+
+                    # 1) Backwards pass: move left from candidate until we find a non‐punct token
+                    while candidate >= start_index:
+                        token_id, token_text, prob = self._get_token_info(encoded_article, candidate, outputs)
+                        # If empty string, prob==1.0, or punctuation/spacing, skip
+                        txt = token_text.strip()
+                        if (not token_text) or (prob == 1.0) or is_spacing_or_punctuation(token_text) or txt.isdigit():
+                            candidate -= 1
+                            continue
+                        # Otherwise, we found a valid token
+                        found_valid = True
+                        break
+
+                    if not found_valid:
+                        # 2) If backwards failed, try forwards from the original index
+                        candidate = index
+                        while candidate < L and attention_mask[candidate] != 0:
+                            token_id, token_text, prob = self._get_token_info(encoded_article, candidate, outputs)
+                            if (not token_text) or (prob == 1.0) or is_spacing_or_punctuation(token_text):
+                                candidate += 1
+                                continue
+                            found_valid = True
+                            break
+
+                    if found_valid:
+                        # Mark this candidate for unmemorization
+                        unmemorize_mask[candidate] = 1
+                        chosen_spot = candidate
+                        span_counter += 1
+                        # Move index forward by 1, so if span>1 we look “just after” this candidate next
+                        index += 1
                     else:
-                        _, token, _ = self._get_token_info(encoding, word_index, outputs)
+                        # No valid token found in either direction: abort this span
+                        break
 
-                    # Set the unmemorize mask
-                    unmemorize_mask[word_index] = 1
-                    
-                    # Move to the next span position
-                    span_index += 1
-                    index = min(index + span_index, len(encoded_article))
-                    
-                # Move to the next stride sposition
-                index = min(index + self.unmemorize_stride, len(encoded_article))
-            
-            # Add the unmemorize mask and article_unmemorize_ids for this article
+                # After finishing this span, if we did choose something, jump to chosen_spot + stride;
+                # otherwise jump from original index + stride.
+                if chosen_spot is not None:
+                    next_index = chosen_spot + self.unmemorize_stride
+                    # If that somehow goes backwards, force at least old_index+1
+                    index = max(next_index, old_index + 1)
+                else:
+                    index = old_index + self.unmemorize_stride
+
+            # Append this article’s mask
             self.encoded_articles['unmemorize_mask'].append(unmemorize_mask)
 
-        # Convert lists to tensors
+        # Stack them into a tensor of shape [num_articles, seq_len]
         self.encoded_articles['unmemorize_mask'] = torch.stack(self.encoded_articles['unmemorize_mask'])
 
     def tokenized_article(self, idx):

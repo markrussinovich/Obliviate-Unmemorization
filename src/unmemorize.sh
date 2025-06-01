@@ -101,11 +101,12 @@ run_experiment() {
     local config=$2
     local sample_count=$3
     local exp_type=$4
-    local smart_flag=$5
-    local dataset=$6
-    local base_dir=$7
-    local top_k=$8 
-    local loss_type=$9
+    local smart_select_flag=$5
+    local smart_stride_flag=$6
+    local dataset=$7
+    local base_dir=$8
+    local top_k=$9
+    local loss_type=${10}
 
     local dataset_path=$(get_dataset_path "$dataset")
     
@@ -119,6 +120,12 @@ run_experiment() {
     echo "- Top K: $top_k"
     if [ -n "$loss_type" ]; then
         echo "- Loss Type: $loss_type"
+    fi
+    if [ -n "$smart_select_flag" ]; then
+        echo "- Smart Select: enabled"
+    fi
+    if [ -n "$smart_stride_flag" ]; then
+        echo "- Smart Stride: enabled"
     fi
     if [ -n "$ACCELERATE_RUN_CONFIG" ]; then
             echo "- Accelerate Config: $ACCELERATE_RUN_CONFIG"
@@ -181,7 +188,8 @@ run_experiment() {
         --run_config \"$CONFIG_ROOT/runs/$config.json\" \
         --num_runs 1 \
         --unmemorize_sample_count \"$sample_count\" \
-        $([[ "$smart_flag" == "--smart_select" ]] && echo "--smart_select") \
+        $smart_select_flag \
+        $smart_stride_flag \
         $top_k_param \
         $loss_type_param \
         $accelerate_run_config_param \
@@ -302,14 +310,20 @@ jq -c '.experiments[]' "$CONFIG_FILE" | while read -r model; do
         echo "$config" | jq -c '.experiment_types[]' | while read -r exp_type; do
             EXP_NAME=$(echo "$exp_type" | jq -r '.name')
             SMART_SELECT=$(echo "$exp_type" | jq -r '.smart_select')
+            SMART_STRIDE=$(echo "$exp_type" | jq -r '.smart_stride')
             DATASET_TYPE=$(echo "$exp_type" | jq -r '.data')
             TOP_K=$(echo "$exp_type" | jq -r '.top_k // empty')
             LOSS_TYPE=$(echo "$exp_type" | jq -r '.loss_type // empty')
 
-            # Set smart flag based on configuration
-            SMART_FLAG=""
+            # Set smart flags based on configuration
+            SMART_SELECT_FLAG=""
             if [ "$SMART_SELECT" = "true" ]; then
-                SMART_FLAG="--smart_select"
+                SMART_SELECT_FLAG="--smart_select"
+            fi
+            
+            SMART_STRIDE_FLAG=""
+            if [ "$SMART_STRIDE" = "true" ]; then
+                SMART_STRIDE_FLAG="--smart_stride"
             fi
             
             run_experiment \
@@ -317,7 +331,8 @@ jq -c '.experiments[]' "$CONFIG_FILE" | while read -r model; do
                 "$CONFIG" \
                 "$SAMPLE_COUNT" \
                 "$EXP_NAME" \
-                "$SMART_FLAG" \
+                "$SMART_SELECT_FLAG" \
+                "$SMART_STRIDE_FLAG" \
                 "$DATASET_TYPE" \
                 "$BASE_DIR" \
                 "$TOP_K" \

@@ -642,7 +642,7 @@ def main():
         # duplicate the data 100 times
         num_samples = len(train_dataset) 
         if args.unmemorize:
-            num_copies = 1000 // len(train_dataset) 
+            num_copies = max(1, 1000 // len(train_dataset))
             #num_copies = 2
             train_dataset = torch.utils.data.ConcatDataset([train_dataset]*num_copies)    
         else:
