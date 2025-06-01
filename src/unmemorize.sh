@@ -351,8 +351,7 @@ jq -c '.experiments[]' "$CONFIG_FILE" | while read -r model; do
                             "$DATASET_TYPE" \
                             "$BASE_DIR" \
                             "$SAMPLE_COUNT" \
-                            "$TOP_K" \
-                            "$LOSS_TYPE"
+                            "$TOP_K"
                 
             echo ""
         done
