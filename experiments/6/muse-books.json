@@ -11,7 +11,8 @@
             {
               "data": "muse-books",
               "name": "smart",
-              "smart_select": true
+              "smart_select": true,
+              "smart_stride": true
             }                            
           ]
         }

@@ -10,7 +10,7 @@
             "experiment_types": [
               {
                 "data": "synthetic",
-                "name": "smart",
+                "name": "stride",
                 "top_k": 10,
                 "smart_select": true,
                 "loss_type": "kl"
@@ -23,7 +23,7 @@
             "experiment_types": [
               {
                 "data": "pretrain",
-                "name": "smart",
+                "name": "stride",
                 "top_k": 10,
                 "smart_select": true,
                 "loss_type": "kl"
