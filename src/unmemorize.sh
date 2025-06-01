@@ -212,6 +212,12 @@ generate_plots() {
     local suffix=""
     if [ "$exp_type" == "smart" ]; then
         suffix=" (Smart)"
+    elif [ "$exp_type" == "smart_stride" ]; then
+        suffix=" (Smart Stride)"
+    elif [ "$exp_type" == "baseline" ]; then
+        suffix=" (Standard)"
+    else
+        suffix=""
     fi
     
     echo "Generating plots..."
