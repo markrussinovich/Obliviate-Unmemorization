@@ -445,15 +445,16 @@ class CustomDataset(Dataset):
     def _apply_unmemorize(self):
         """
         Build `self.encoded_articles['unmemorize_mask']`, ensuring that we never pick
-        punctuation/space tokens for unmemorization.  Each time we “choose” a token, we
-        record chosen_spot, and the next stride starts at chosen_spot + unmemorize_stride.
+        punctuation/space tokens for unmemorization. Modified to only search forward
+        from the current position, not backward.
         """
         self.encoded_articles['unmemorize_mask'] = []
         self.encoded_articles['article_unmemorize_ids'] = []
 
-        for encoded_article, attention_mask in zip(
+        for encoded_article, attention_mask, answer_index in zip(
             self.encoded_articles['input_ids'],
-            self.encoded_articles['attention_mask']
+            self.encoded_articles['attention_mask'],
+            self.answer_index
         ):
             
             # Move each to the correct device
@@ -472,10 +473,13 @@ class CustomDataset(Dataset):
             unmemorize_mask = torch.zeros_like(attention_mask)
 
             # Figure out where the real tokens start (skip any initial padding or special tokens)
-            # We skip index 0 because it’s usually [CLS] or similar
+            # We skip index 0 because it's usually [CLS] or similar
             start_index = (attention_mask != 0).nonzero(as_tuple=True)[0][0].item() + 1
 
-            # Our “raw” index where we attempt the first unmemorize
+            # skip prompt 
+            start_index += answer_index
+
+            # Our "raw" index where we attempt the first unmemorize
             index = start_index + self.unmemorize_start
             L = len(encoded_article)
 
@@ -484,62 +488,50 @@ class CustomDataset(Dataset):
                 span_counter = 0
                 chosen_spot = None
 
-                # We will attempt up to unmemorize_span tokens “in this window”,
+                # We will attempt up to unmemorize_span tokens "in this window",
                 # each time skipping punctuation/spacing until we find a valid token.
                 while span_counter < self.unmemorize_span and index < L and attention_mask[index] != 0:
                     # We start with a candidate = index
                     candidate = index
                     found_valid = False
 
-                    # 1) Backwards pass: move left from candidate until we find a non‐punct token
-                    while candidate >= start_index:
+                    # Only search forward from the current candidate position
+                    while candidate < L and attention_mask[candidate] != 0:
                         token_id, token_text, prob = self._get_token_info(encoded_article, candidate, outputs)
-                        # If empty string, prob==1.0, or punctuation/spacing, skip
                         txt = token_text.strip()
                         if (not token_text) or (prob == 1.0) or is_spacing_or_punctuation(token_text) or txt.isdigit():
-                            candidate -= 1
+                            candidate += 1
                             continue
                         # Otherwise, we found a valid token
                         found_valid = True
                         break
-
-                    if not found_valid:
-                        # 2) If backwards failed, try forwards from the original index
-                        candidate = index
-                        while candidate < L and attention_mask[candidate] != 0:
-                            token_id, token_text, prob = self._get_token_info(encoded_article, candidate, outputs)
-                            if (not token_text) or (prob == 1.0) or is_spacing_or_punctuation(token_text):
-                                candidate += 1
-                                continue
-                            found_valid = True
-                            break
 
                     if found_valid:
                         # Mark this candidate for unmemorization
                         unmemorize_mask[candidate] = 1
                         chosen_spot = candidate
                         span_counter += 1
-                        # Move index forward by 1, so if span>1 we look “just after” this candidate next
-                        index += 1
+                        # Move index forward by 1, so if span>1 we look "just after" this candidate next
+                        index = candidate + 1
                     else:
-                        # No valid token found in either direction: abort this span
+                        # No valid token found: abort this span
                         break
 
                 # After finishing this span, if we did choose something, jump to chosen_spot + stride;
                 # otherwise jump from original index + stride.
                 if chosen_spot is not None:
-                    next_index = chosen_spot + self.unmemorize_stride
+                    next_index = chosen_spot + self.unmemorize_stride + 1
                     # If that somehow goes backwards, force at least old_index+1
                     index = max(next_index, old_index + 1)
                 else:
-                    index = old_index + self.unmemorize_stride
+                    index = old_index + self.unmemorize_stride + 1 
 
-            # Append this article’s mask
+            # Append this article's mask
             self.encoded_articles['unmemorize_mask'].append(unmemorize_mask)
 
         # Stack them into a tensor of shape [num_articles, seq_len]
         self.encoded_articles['unmemorize_mask'] = torch.stack(self.encoded_articles['unmemorize_mask'])
-
+        
     def tokenized_article(self, idx):
         return self.tokenized_articles[idx]
     
