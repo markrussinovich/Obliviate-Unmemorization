@@ -686,17 +686,8 @@ def collect_stats_from_metrics_files(logging_folder, target_offset=0, target_pri
     rouge_to_base = {f: get_base_name(f) for f in rouge_files}
     bleu_to_base = {f: get_base_name(f) for f in bleu_files}
     
-    # Initialize stats collector
-    all_metrics = {
-        'edit_distance': [],
-        'longest_common_substring': [],
-        'longest_common_word_substring': [],
-        'rouge1': [],
-        'rouge2': [],
-        'rougeL': [],
-        'rougeLsum': [],
-        'bleu': []
-    }
+    # Initialize stats collector - collect per sample first
+    sample_metrics = {}
     
     # Read all metrics files
     for file_name in metrics_files:
@@ -711,10 +702,17 @@ def collect_stats_from_metrics_files(logging_folder, target_offset=0, target_pri
                     if 'offset' in metrics and metrics['offset'] != target_offset:
                         continue
                 
-                # Collect scalar metrics
-                all_metrics['edit_distance'].append(metrics.get('edit_distance', 0))
-                all_metrics['longest_common_substring'].append(metrics.get('longest_common_substring', 0))
-                all_metrics['longest_common_word_substring'].append(metrics.get('longest_common_word_substring', 0))
+                # Initialize sample metrics
+                sample_data = {
+                    'edit_distance': metrics.get('edit_distance', 0),
+                    'longest_common_substring': metrics.get('longest_common_substring', 0),
+                    'longest_common_word_substring': metrics.get('longest_common_word_substring', 0),
+                    'rouge1': 0,
+                    'rouge2': 0,
+                    'rougeL': 0,
+                    'rougeLsum': 0,
+                    'bleu': 0
+                }
                 
                 # Find corresponding Rouge file
                 matching_rouge_files = [rf for rf, rb in rouge_to_base.items() if rb == base_name]
@@ -730,9 +728,9 @@ def collect_stats_from_metrics_files(logging_folder, target_offset=0, target_pri
                                     rouge_value = rouge_scores[rouge_type]
                                     # Check if the value is a dictionary or direct float
                                     if isinstance(rouge_value, dict) and 'fmeasure' in rouge_value:
-                                        all_metrics[rouge_type].append(rouge_value['fmeasure'])
+                                        sample_data[rouge_type] = rouge_value['fmeasure']
                                     elif isinstance(rouge_value, (int, float)):
-                                        all_metrics[rouge_type].append(rouge_value)
+                                        sample_data[rouge_type] = rouge_value
                     except Exception as e:
                         print(f"Error reading Rouge file {rouge_file}: {e}")
                 
@@ -745,12 +743,33 @@ def collect_stats_from_metrics_files(logging_folder, target_offset=0, target_pri
                         with open(bleu_path, 'r') as bf:
                             bleu_scores = json.load(bf)
                             if 'bleu' in bleu_scores:
-                                all_metrics['bleu'].append(bleu_scores['bleu'])
+                                sample_data['bleu'] = bleu_scores['bleu']
                     except Exception as e:
                         print(f"Error reading BLEU file {bleu_file}: {e}")
                 
+                # Check if all values are zero for this sample
+                all_zero = all(value == 0 for value in sample_data.values())
+                if not all_zero:
+                    sample_metrics[base_name] = sample_data
+                        
         except Exception as e:
             print(f"Error reading metrics file {file_name}: {e}")
+    
+    # Now aggregate the filtered samples
+    all_metrics = {
+        'edit_distance': [],
+        'longest_common_substring': [],
+        'longest_common_word_substring': [],
+        'rouge1': [],
+        'rouge2': [],
+        'rougeL': [],
+        'rougeLsum': [],
+        'bleu': []
+    }
+    
+    for sample_data in sample_metrics.values():
+        for metric_name in all_metrics.keys():
+            all_metrics[metric_name].append(sample_data[metric_name])
     
     # Compute statistics
     stats = {}
@@ -781,16 +800,15 @@ def main():
     
     # Skip testing if log already exists
     if os.path.exists(log_file) and os.path.getsize(log_file) > 0:
-        print(f"Log file {log_file} already exists. Skipping test run.")
+        print(f"Log file {summary_file} already exists. Skipping test run.")
         
         # Only generate summary if it doesn't exist yet
         if not os.path.exists(summary_file):
             print(f"Generating summary statistics from existing metrics...")
-            logger = setup_logging(args.logging_folder, greedy=args.greedy, insert=args.insert, level=logging.INFO)
             summary_stats = collect_stats_from_metrics_files(args.logging_folder, target_offset=None, target_prime_length=None)
             with open(summary_file, 'w') as f:
                 json.dump(summary_stats, f, indent=2)
-            logger.info(f"Summary statistics saved to {summary_file}")
+            print(f"Summary statistics saved to {summary_file}")
         return
     
     # If log doesn't exist or is empty, proceed with testing

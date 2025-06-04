@@ -38,9 +38,9 @@
             "request": "launch",
             "program": "${workspaceFolder}/src/test.py",
             "args": [
-                "--model", "/datadrive2/unmemorize/experiments/llama3.1-8b/memorized/model",
-                "--logging_folder", "/datadrive2/unmemorize/test/llama3.1-8b/memorized",
-                "--sample_count", "10",
+                "--model", "/datadrive2/unmemorize/experiments/4/standard/synthetic/llama3.1-8b-instruct/10/10-4-1/0",
+                "--logging_folder", "/datadrive2/unmemorize/experiments/4/standard/synthetic/llama3.1-8b-instruct/10/10-4-1/0",
+                "--sample_count", "100",
                 "--dataset", "data/synthetic"
             ],
         },
