@@ -188,7 +188,7 @@ def run_unmemorize(model_name, model_config, logging_folder, model_folder,
 def run_test( model_name, logging_folder, dataset, sample_count, instruct, runMIA=False ):
 
     # if test.log doesn't exists, execute the tests 
-    if os.path.exists(logging_folder + "/test.log"):
+    if os.path.exists(logging_folder + "/test.json"):
         print("Test already exists. Skipping test.")
     else:    
 
@@ -205,7 +205,7 @@ def run_test( model_name, logging_folder, dataset, sample_count, instruct, runMI
         if result != 0:
             return False  
 
-    if os.path.exists(logging_folder + "/test_greedy.log"):
+    if os.path.exists(logging_folder + "/test-greedy.json"):
         print("Test greedy already exists. Skipping test.")
     else:
         # run rest of tests

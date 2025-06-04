@@ -339,10 +339,7 @@ class CustomDataset(Dataset):
                                 
                                 if token != article_token:
                                     if self.unmemorize_smart_select == True:
-                                        # Skip all spacing and punctuation for smart_select
-                                        if is_spacing_or_punctuation(token_text):
-                                            continue
-                                    
+
                                         # Apply both space and capitalization requirements
                                         if requires_space:
                                             if not (token_text.startswith(' ') or token_text.startswith('-')):

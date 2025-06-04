@@ -879,7 +879,7 @@ def main():
             
             if args.loss_type is not None:
                 # Fixed loss type - use simpler early stopping
-                if loss_type == "kl" and (eval_loss < 0.01 or no_progress):
+                if loss_type == "kl" and (eval_loss < 0.06 or no_progress):
                     logger.info(f"epoch {epoch}: Terminating with fixed KL loss: {eval_loss:.6f}")
                     break
                 elif loss_type == "combined" and (eval_loss < 0.10 or no_progress):
