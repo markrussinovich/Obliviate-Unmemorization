@@ -718,7 +718,7 @@ def calculate_target_loss(logger, model, tokenizer, outputs, labels, attention_m
 
                 # Calculate the combined loss
                 # 1. Barrier component: penalizes as prob approaches 1
-                barrier_component = -torch.log(1 - target_prob + EPSILON) ** TARGET_LOSS_EXPONENT
+                barrier_component = (-torch.log(1 - target_prob + EPSILON)) ** TARGET_LOSS_EXPONENT
                 
                 # 2. Threshold component: directly targets specific threshold
                 if target_prob > TARGET_PROB_THRESHOLD:
